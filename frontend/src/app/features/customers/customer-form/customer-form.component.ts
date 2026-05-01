@@ -164,7 +164,7 @@ export interface CustomerDetail {
   styles: [`
     .customer-form-container {
       padding: 24px;
-      max-width: 900px;
+      max-width: 1280px;
       margin: 0 auto;
     }
 
@@ -202,15 +202,19 @@ export interface CustomerDetail {
       padding: 24px 0;
     }
 
+    /* Cap removed — let the basic-info tab fill the wider container so
+       fields breathe instead of clustering in a narrow column. */
     .basic-form {
-      max-width: 720px;
+      width: 100%;
     }
 
     .form-row {
       display: flex;
       gap: 16px;
       margin-bottom: 8px;
+      flex-wrap: wrap;
     }
+    .form-row > mat-form-field { min-width: 220px; }
 
     .half-width {
       flex: 1;

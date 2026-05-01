@@ -70,8 +70,8 @@ export interface CommunicationLog {
               <mat-label>Communication Mode</mat-label>
               <mat-select formControlName="commmode">
                 <mat-option [value]="null">All Modes</mat-option>
-                @for (mode of commModes; track mode) {
-                  <mat-option [value]="mode">{{ mode }}</mat-option>
+                @for (mode of commModes; track mode.commmodeId) {
+                  <mat-option [value]="mode.commmode">{{ mode.commmode }}</mat-option>
                 }
               </mat-select>
             </mat-form-field>
@@ -237,7 +237,10 @@ export class CommunicationLogListComponent implements OnInit {
 
   displayedColumns: string[] = ['commlogID', 'commmode', 'contactto', 'commsubject', 'createdon', 'actions'];
   dataSource = new MatTableDataSource<CommunicationLog>([]);
-  commModes: string[] = [];
+  /** Master rows shape: { commmodeId, companyId, commmode, isActive }.
+   *  We display `.commmode` as the label and bind it as the value too,
+   *  since the comm-log table stores the mode as a free-form string. */
+  commModes: { commmodeId: number; commmode: string }[] = [];
   isLoading = false;
   filterForm: FormGroup;
 
@@ -267,7 +270,7 @@ export class CommunicationLogListComponent implements OnInit {
   }
 
   loadCommModes(): void {
-    this.apiService.get<string[]>('/masters/communication-modes').subscribe({
+    this.apiService.get<{ commmodeId: number; commmode: string }[]>('/masters/communication-modes').subscribe({
       next: (data) => this.commModes = data || [],
       error: () => this.notificationService.error('Failed to load communication modes'),
     });

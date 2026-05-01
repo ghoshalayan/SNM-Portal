@@ -43,8 +43,9 @@ interface LinePoint { x: number; y: number; label: string; }
       <div *ngSwitchCase="'stat_group'" class="stat-group">
         <div *ngFor="let s of statGroup(); let i = index"
              class="stat"
+             [class.is-text]="s.isText"
              [style.animation-delay.ms]="i * 80">
-          <div class="value">
+          <div class="value" [title]="s.isText && s.raw ? s.raw : null">
             <app-animated-number [value]="s.raw" [format]="s.format" />
           </div>
           <div class="label">{{ s.label }}</div>
@@ -334,6 +335,11 @@ interface LinePoint { x: number; y: number; label: string; }
         background: var(--kpi-bg-soft);
         border: 1px solid var(--kpi-border);
         padding: 14px 12px; border-radius: 10px; text-align: center;
+        // Allow the tile to shrink past its intrinsic content width
+        // so a long string value can be ellipsised instead of forcing
+        // the grid column to grow and break the layout.
+        min-width: 0;
+        overflow: hidden;
         transition:
           transform 200ms cubic-bezier(0.2, 0, 0, 1),
           border-color 200ms ease,
@@ -348,10 +354,34 @@ interface LinePoint { x: number; y: number; label: string; }
         font-size: 1.4rem; font-weight: 700;
         color: var(--kpi-text);
         letter-spacing: -0.01em;
+        // Generic safety: long numeric formats shouldn't blow the tile
+        // either — keep them on one line with mid-word break if they do.
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      // Non-numeric stat values (e.g. a username column accidentally
+      // rendered in a stat-group) shouldn't use the giant numeric
+      // typography — drop to a normal-readable size, allow up to two
+      // lines, then truncate with ellipsis. The native title attr
+      // shows the full value on hover.
+      .stat.is-text .value {
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.25;
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        -webkit-box-orient: vertical;
+        word-break: break-word;
       }
       .label {
         color: var(--kpi-text-muted); font-size: 0.72rem;
         margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
     }
 
@@ -542,9 +572,28 @@ export class ChartRendererComponent {
 
   /** Phase E — axis-name accessors. Builder-mode KPIs ship the
    * underlying column name through ``x_label`` / ``y_label``;
-   * raw-SQL KPIs may set them by hand or leave them blank. */
-  readonly xLabel = computed<string>(() => this.cfg()['x_label'] ?? '');
-  readonly yLabel = computed<string>(() => this.cfg()['y_label'] ?? '');
+   * raw-SQL KPIs may set them by hand or leave them blank. We fall
+   * back to a humanised version of the underlying column name so
+   * even uncurated KPIs read sensibly instead of showing a blank
+   * axis title. */
+  readonly xLabel = computed<string>(() => {
+    const explicit = this.cfg()['x_label'];
+    if (explicit) return explicit;
+    const r = this.result();
+    const cfg = this.cfg();
+    const col = cfg['category_column'] ?? r?.columns?.[0];
+    return col ? this.humanizeLabel(col) : '';
+  });
+  readonly yLabel = computed<string>(() => {
+    const explicit = this.cfg()['y_label'];
+    if (explicit) return explicit;
+    const r = this.result();
+    const cfg = this.cfg();
+    const col = cfg['value_column']
+      ?? (r?.columns ?? []).find((_, i) => i !== (r?.columns ?? []).indexOf(cfg['category_column'] ?? r?.columns?.[0]))
+      ?? r?.columns?.[1];
+    return col ? this.humanizeLabel(col) : '';
+  });
   readonly valueFormat = computed<ValueFormat>(
     () => (this.cfg()['value_format'] as ValueFormat) || 'number',
   );
@@ -579,7 +628,7 @@ export class ChartRendererComponent {
       // Pass numbers through verbatim so AnimatedNumberComponent can
       // ramp them in; non-numeric values render as plain text.
       raw: this.coerceForAnimation(raw),
-      label: labelCol ?? valueCol ?? '',
+      label: this.humanizeLabel(labelCol ?? valueCol ?? ''),
       format: (cfg['value_format'] as ValueFormat | null) ?? null,
     };
   });
@@ -587,20 +636,64 @@ export class ChartRendererComponent {
   readonly statGroup = computed(() => {
     const r = this.result();
     const cfg = this.cfg();
-    if (!r || !r.rows.length) return [] as Array<{ label: string; raw: any; format: ValueFormat | null }>;
+    if (!r || !r.rows.length) return [] as Array<{ label: string; raw: any; format: ValueFormat | null; isText: boolean }>;
     const cols: string[] = cfg['value_columns'] ?? r.columns;
     const formats: Record<string, ValueFormat> = cfg['value_formats'] ?? {};
     const labels: Record<string, string> = cfg['value_labels'] ?? {};
     return cols.map(c => {
       const idx = r.columns.indexOf(c);
       const raw = idx >= 0 ? r.rows[0][idx] : null;
+      const coerced = this.coerceForAnimation(raw);
       return {
-        label: labels[c] ?? c,
-        raw: this.coerceForAnimation(raw),
+        label: labels[c] ?? this.humanizeLabel(c),
+        raw: coerced,
         format: (formats[c] as ValueFormat | null) ?? null,
+        // ``isText`` lets the template drop the giant-numeric typography
+        // for string values (e.g. usernames) which otherwise wrap and
+        // burst the tile when stat-group is misused with non-numeric
+        // columns.
+        isText: typeof coerced === 'string',
       };
     });
   });
+
+  /**
+   * Cryptic column names like ``enqid_count``, ``enquiriesconvertedtoquotations``,
+   * or ``username`` are common when an LLM-generated KPI doesn't supply
+   * an explicit ``value_label``. This converts them into something
+   * readable: snake_case / kebab-case / camelCase split into words,
+   * Title-Cased, with a small allowlist of acronyms left ALL-CAPS so
+   * domain terms (ID, GST, PAN, FY, PO, KPI, SQL, MM, MT, KG, NOS,
+   * IGST, CGST, SGST, GSTN, MOU, TPW, SWE, OHD, IFC, CRS, CD, JC)
+   * survive un-mangled.
+   */
+  humanizeLabel(raw: string): string {
+    if (!raw) return '';
+    const s = String(raw).trim();
+    if (!s) return '';
+    // 1. Insert spaces between snake_case / kebab-case / camelCase boundaries.
+    const spaced = s
+      .replace(/[_-]+/g, ' ')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .trim();
+    if (!spaced) return s;
+    // 2. Title-case each word, but keep known abbreviations capitalised.
+    const ACRONYMS = new Set([
+      'ID', 'IDS', 'GST', 'PAN', 'FY', 'PO', 'KPI', 'KPIS', 'SQL', 'API',
+      'URL', 'UI', 'UX', 'NOS', 'MM', 'MT', 'KG', 'IGST', 'CGST', 'SGST',
+      'GSTN', 'MOU', 'TPW', 'SWE', 'OHD', 'IFC', 'CRS', 'CD', 'JC', 'TOD',
+      'HOD', 'KRO', 'TNC', 'YTD', 'MTD', 'QTD', 'COGS', 'GRR', 'NRR',
+    ]);
+    return spaced
+      .split(/\s+/)
+      .map(word => {
+        const upper = word.toUpperCase();
+        if (ACRONYMS.has(upper)) return upper;
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      })
+      .join(' ');
+  }
 
   /** Convert "looks numeric" strings (e.g. ``"42"``) into actual
    * numbers so the count-up animation kicks in. Anything else passes

@@ -159,14 +159,16 @@ export interface CustomerSite {
   `,
   styles: [`
     .site-form {
-      min-width: 520px;
+      min-width: 760px;
       padding: 8px 0;
     }
     .form-row {
       display: flex;
       gap: 16px;
       margin-bottom: 4px;
+      flex-wrap: wrap;
     }
+    .form-row > mat-form-field { min-width: 220px; }
     .half-width {
       flex: 1;
     }
@@ -550,7 +552,8 @@ export class CustomerSitesComponent implements OnInit, OnChanges {
         customerCode: this.customerCode,
         nextSiteIndex: site ? 0 : this.getNextSiteIndex(),
       },
-      width: '600px',
+      width: '880px',
+      maxWidth: '95vw',
       disableClose: true,
     });
 

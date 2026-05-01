@@ -43,6 +43,7 @@ router = APIRouter()
 
 @router.get("/search")
 def search_quotations(
+    enqId: Optional[int] = Query(None, description="Restrict to quotations linked to this enquiry"),
     params: CursorParams = Depends(),
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
@@ -52,6 +53,9 @@ def search_quotations(
     - Prefix/substring match on quotNo and subject
     - Applies F2/F5/F6 visibility (company + hierarchy + location)
     - Returns latest first (descending quotId)
+    - Optional ``enqId`` filter scopes results to a single enquiry's
+      quotations — used by the communication-log dialog to enforce
+      that the picked quotation actually belongs to the picked enquiry.
     """
     require_permission(MENU, "CanRead", ctx)
     from app.models.customer import CustomerMaster
@@ -75,6 +79,8 @@ def search_quotations(
         q, CustomerSite.state, CustomerSite.dist, ctx,
         nullable_fk=QuotSummary.siteId,
     )
+    if enqId is not None:
+        q = q.filter(QuotSummary.enqid == enqId)
 
     # id-lookup mode
     if params.ids:

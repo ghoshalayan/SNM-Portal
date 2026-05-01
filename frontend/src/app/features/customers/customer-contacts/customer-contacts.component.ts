@@ -192,13 +192,15 @@ interface ContactType {
   `,
   styles: [`
     .contact-form {
-      min-width: 500px;
+      min-width: 760px;
       padding: 8px 0;
     }
     .form-row {
       display: flex;
       gap: 16px;
+      flex-wrap: wrap;
     }
+    .form-row > mat-form-field { min-width: 220px; }
     .half-width {
       flex: 1;
     }
@@ -541,7 +543,8 @@ export class CustomerContactsComponent implements OnInit, OnChanges {
   openDialog(contact: CustomerContact | null): void {
     const dialogRef = this.dialog.open(ContactDialogComponent, {
       data: { contact },
-      width: '620px',
+      width: '880px',
+      maxWidth: '95vw',
       disableClose: true,
     });
 
