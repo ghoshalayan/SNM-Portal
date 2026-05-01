@@ -15,7 +15,7 @@ from app.models.customer import CustomerContacts, CustomerMaster, CustomerSite
 from app.models.delivery import DeliveryMode
 from app.models.quot_annexure import QuotAnnexure
 from app.models.quot_viability import QuotViabilityLine, QuotViabilitySheet
-from app.models.quotation import QuotSummary
+from app.models.quotation import QuotSummary, QuotTermsNConditions
 from app.models.user import User
 
 
@@ -124,10 +124,53 @@ def generate_annexure(
         .filter(DeliveryMode.deliveryModeId == quotation.deliveryModeId)
         .first() if quotation.deliveryModeId else None
     )
+    # Signature roles per business rule:
+    #   * Prepared By (KRO) = the user who actually created the quotation
+    #     row — i.e. ``createdby`` on ``QuotSummary``. They keyed in the
+    #     line items, picked the customer, etc.
+    #   * Checked By (HOD) = the quotation's ``ownerUserId`` — the user
+    #     whose userCode is embedded in the quotNo (resolved at create
+    #     time per the role's numGenMode). When numGenMode = own_code
+    #     this is the same person as Prepared By; under parent_code /
+    #     select_code it's the supervising HOD.
     owner_user = (
         db.query(User).filter(User.userId == quotation.ownerUserId).first()
         if quotation.ownerUserId else None
     )
+    creator_user = (
+        db.query(User).filter(User.userId == quotation.createdby).first()
+        if quotation.createdby else None
+    )
+
+    # ----- Payment Terms auto-fill from T&C -----
+    # Find the quotation's T&C row whose name reads as a payment term
+    # (e.g. "Payment Terms", "Payment Schedule"). The description text is
+    # the closest match to what the annexure's payment-terms field
+    # expects to display, so seed it as the default. KRO can edit later.
+    payment_terms_default: Optional[str] = None
+    # ``nullslast`` isn't supported by SQL Server — emit a plain
+    # ``ORDER BY sortOrder ASC, quotTncId ASC``. Rows with a null
+    # sortOrder will sort first, which is acceptable: we only need any
+    # one matching row, and the secondary key keeps the result
+    # deterministic across calls.
+    payment_tnc = (
+        db.query(QuotTermsNConditions)
+        .filter(
+            QuotTermsNConditions.quotId == quotation.quotId,
+            QuotTermsNConditions.companyId == quotation.companyId,
+            QuotTermsNConditions.isActive == True,  # noqa: E712
+            QuotTermsNConditions.tncName.ilike("%payment%"),
+        )
+        .order_by(
+            QuotTermsNConditions.sortOrder.asc(),
+            QuotTermsNConditions.quotTncId.asc(),
+        )
+        .first()
+    )
+    if payment_tnc:
+        payment_terms_default = (
+            payment_tnc.tncDescription or payment_tnc.tncName or None
+        )
 
     active_lines = [l for l in viability.lines if l.isActive]
 
@@ -205,9 +248,19 @@ def generate_annexure(
         # Diawise breakup snapshot (JSON)
         diawiseBreakup=json.dumps(compute_diawise_breakup(active_lines)),
 
-        # Signatures
-        preparedByUserId=quotation.ownerUserId,
-        preparedByName=owner_user.userName if owner_user else None,
+        # Pre-fill payment terms from the quotation's matching T&C row.
+        # The KRO can override on the annexure form before approval.
+        paymentTerms=payment_terms_default,
+
+        # Signatures — Prepared By (KRO) is whoever actually created the
+        # quotation row; Checked By (HOD) is the quotation owner (whose
+        # userCode is in the quotNo, resolved per numGenMode at create
+        # time). Names are stored as snapshots so historical annexures
+        # stay readable even after a user is renamed / archived.
+        preparedByUserId=quotation.createdby,
+        preparedByName=creator_user.userName if creator_user else None,
+        checkedByUserId=quotation.ownerUserId,
+        checkedByName=owner_user.userName if owner_user else None,
 
         createdby=user_id,
     )
