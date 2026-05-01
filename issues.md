@@ -153,6 +153,8 @@ max_size = CATEGORY_MAX_SIZE_BYTES.get(cat)  # Returns None for 'general' → no
 
 ---
 
+
+
 ## Immediate Action Items
 
 1. Encrypt SMTP passwords — C1
