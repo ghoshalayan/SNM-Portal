@@ -15,6 +15,10 @@ export interface MenuPermission {
   canRevise?: boolean;
   canTransferOwnership?: boolean;
   canGenerateUnderOthers?: boolean;
+  /** Granted only to the "Commercial HOD" template. Gates annexure
+   *  approval and lets the holder edit annexures even after they are
+   *  approved (override of the regular post-approval lock). */
+  canApproveAnnexure?: boolean;
   children?: MenuPermission[];
 }
 
@@ -45,11 +49,13 @@ export interface RoleSettings {
 export const ALL_PERMISSION_FLAGS: (keyof MenuPermission)[] = [
   'canAdd', 'canRead', 'canEdit', 'canDelete', 'canEditNumber',
   'canApprove', 'canRevise', 'canTransferOwnership', 'canGenerateUnderOthers',
+  'canApproveAnnexure',
 ];
 
 export type FlagKey =
   | 'canAdd' | 'canRead' | 'canEdit' | 'canDelete' | 'canEditNumber'
-  | 'canApprove' | 'canRevise' | 'canTransferOwnership' | 'canGenerateUnderOthers';
+  | 'canApprove' | 'canRevise' | 'canTransferOwnership' | 'canGenerateUnderOthers'
+  | 'canApproveAnnexure';
 
 /** Preset templates for quick role baseline. */
 export interface PermissionPreset {

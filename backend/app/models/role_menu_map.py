@@ -19,3 +19,8 @@ class RoleMenuMap(Base, AuditMixin):
     CanRevise = Column(Boolean, default=False, nullable=False)
     CanTransferOwnership = Column(Boolean, default=False, nullable=False)
     CanGenerateUnderOthers = Column(Boolean, default=False, nullable=False)
+    # Granted only to the "Commercial HOD" role template — gates the
+    # annexure /approve endpoint AND lets the holder edit an annexure
+    # even after it has been approved (override of the regular lock).
+    # Regular HODs keep CanApprove for quotation-level approval.
+    CanApproveAnnexure = Column(Boolean, default=False, nullable=False)

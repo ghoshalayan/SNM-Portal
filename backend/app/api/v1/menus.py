@@ -166,6 +166,7 @@ def get_permission_schema(
         "Quotations": [
             "canEditNumber", "canApprove", "canRevise",
             "canTransferOwnership", "canGenerateUnderOthers",
+            "canApproveAnnexure",
         ],
         "Enquiries": [
             "canEditNumber", "canApprove",
@@ -184,6 +185,7 @@ def get_permission_schema(
         "canRevise": "Revise",
         "canTransferOwnership": "Transfer Ownership",
         "canGenerateUnderOthers": "Gen Under Others",
+        "canApproveAnnexure": "Approve Annexure",
     }
     # One-line business hints used in tooltips and the preview strip.
     descriptions = {
@@ -196,6 +198,7 @@ def get_permission_schema(
         "canRevise": "Create a new revision of an approved record",
         "canTransferOwnership": "Hand ownership to another user",
         "canGenerateUnderOthers": "Generate numbers using another user's code",
+        "canApproveAnnexure": "Approve a quotation annexure and edit it post-approval (Commercial HOD)",
     }
     return {
         "core": CORE,
@@ -241,6 +244,7 @@ def get_role_menu_permissions(
             "canRevise": m.CanRevise if m else False,
             "canTransferOwnership": m.CanTransferOwnership if m else False,
             "canGenerateUnderOthers": m.CanGenerateUnderOthers if m else False,
+            "canApproveAnnexure": m.CanApproveAnnexure if m else False,
         })
     return result
 
@@ -260,6 +264,7 @@ def save_role_menu_permissions(
     AUDIT_FIELDS = [
         "canAdd", "canRead", "canEdit", "canDelete", "canEditNumber",
         "canApprove", "canRevise", "canTransferOwnership", "canGenerateUnderOthers",
+        "canApproveAnnexure",
     ]
     FIELD_TO_COL = {
         "canAdd": "CanAdd",
@@ -271,6 +276,7 @@ def save_role_menu_permissions(
         "canRevise": "CanRevise",
         "canTransferOwnership": "CanTransferOwnership",
         "canGenerateUnderOthers": "CanGenerateUnderOthers",
+        "canApproveAnnexure": "CanApproveAnnexure",
     }
 
     # Snapshot current state BEFORE any mutation so the diff is accurate.
@@ -307,6 +313,7 @@ def save_role_menu_permissions(
             existing.CanRevise = getattr(perm, "canRevise", False)
             existing.CanTransferOwnership = getattr(perm, "canTransferOwnership", False)
             existing.CanGenerateUnderOthers = getattr(perm, "canGenerateUnderOthers", False)
+            existing.CanApproveAnnexure = getattr(perm, "canApproveAnnexure", False)
             existing.isActive = True
             existing.lastupdateby = current_user.user_id
         else:
@@ -322,6 +329,7 @@ def save_role_menu_permissions(
                 CanRevise=getattr(perm, "canRevise", False),
                 CanTransferOwnership=getattr(perm, "canTransferOwnership", False),
                 CanGenerateUnderOthers=getattr(perm, "canGenerateUnderOthers", False),
+                CanApproveAnnexure=getattr(perm, "canApproveAnnexure", False),
                 createdby=current_user.user_id,
             )
             db.add(existing)

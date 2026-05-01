@@ -101,15 +101,21 @@ export interface Annexure {
           <button mat-stroked-button (click)="openPrint()">
             <mat-icon>print</mat-icon> Print
           </button>
-          @if (annexure.status === 'Draft') {
-            <button mat-raised-button color="primary" (click)="save()" [disabled]="saving || readOnly">
+          <!-- Save: enabled while editing is allowed (Draft for everyone,
+               Approved-too for Commercial HODs via canApproveAnnexure). -->
+          @if (!isLocked) {
+            <button mat-raised-button color="primary" (click)="save()" [disabled]="saving">
               <mat-icon>save</mat-icon> Save
             </button>
-            @if (canApprove) {
-              <button mat-raised-button color="accent" (click)="approve()" [disabled]="saving">
-                <mat-icon>verified</mat-icon> Approve
-              </button>
-            }
+          }
+          <!-- Approve: only the Commercial HOD (canApproveAnnexure) can
+               sign off, and only on a Draft annexure. Once Approved
+               there's no re-approve flow — Commercial HOD can keep
+               editing but the status stays Approved. -->
+          @if (annexure.status === 'Draft' && canApproveAnnexure) {
+            <button mat-raised-button color="accent" (click)="approve()" [disabled]="saving">
+              <mat-icon>verified</mat-icon> Approve
+            </button>
           }
         }
       </mat-card-header>
@@ -443,6 +449,11 @@ export interface Annexure {
 export class QuotationAnnexureComponent implements OnChanges {
   @Input({ required: true }) quotId!: number;
   @Input() canApprove = false;
+  /** Granted to the Commercial HOD role. Two effects:
+   *    1. Approve button visibility — only shown when this is true.
+   *    2. Override of the post-approval lock — Commercial HODs can edit
+   *       an annexure even after status = Approved. */
+  @Input() canApproveAnnexure = false;
   @Input() readOnly = false;
 
   /** Fires after generate / approve so the parent quotation-form can re-sync
@@ -454,7 +465,13 @@ export class QuotationAnnexureComponent implements OnChanges {
   saving = false;
 
   get isLocked(): boolean {
-    return this.readOnly || this.annexure?.status === 'Approved';
+    if (this.readOnly) return true;
+    // Approved → locked, EXCEPT for Commercial HODs who keep edit
+    // rights post-approval per the canApproveAnnexure permission flag.
+    if (this.annexure?.status === 'Approved' && !this.canApproveAnnexure) {
+      return true;
+    }
+    return false;
   }
 
   constructor(

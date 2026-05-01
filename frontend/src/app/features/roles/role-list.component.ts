@@ -80,7 +80,8 @@ interface Role {
               <button mat-icon-button color="primary" (click)="openDialog(row)">
                 <mat-icon>edit</mat-icon>
               </button>
-              <button mat-icon-button color="accent" [routerLink]="['/roles', row.roleId, 'menu-mapping']">
+              <button mat-icon-button color="accent" [routerLink]="['/roles', row.roleId, 'permissions-v2']"
+                matTooltip="Manage permissions">
                 <mat-icon>security</mat-icon>
               </button>
               <button mat-icon-button color="warn" (click)="deleteRole(row)">

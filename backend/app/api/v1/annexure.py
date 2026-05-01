@@ -121,7 +121,11 @@ def update_annexure(
     can be re-submitted as an array (stored as JSON)."""
     require_permission(MENU, "CanEdit", ctx)
     ann = _get_annexure_or_403(db, annexure_id, ctx)
-    if ann.status == "Approved":
+    # Locked once approved — except for users with the
+    # ``CanApproveAnnexure`` flag (the Commercial HOD role), who keep
+    # editing rights post-approval so corrections can be applied to a
+    # signed-off annexure without a full revision cycle.
+    if ann.status == "Approved" and not ctx.has_permission(MENU, "CanApproveAnnexure"):
         raise HTTPException(400, "Annexure is Approved and locked for edits.")
 
     data = body.model_dump(exclude_unset=True)
@@ -179,7 +183,12 @@ def approve_annexure(
     )
     quot_id_for_log = pre_ann.quotId if pre_ann else 0
     try:
-        require_permission(MENU, "CanApprove", ctx)
+        # Annexure approval is gated specifically on CanApproveAnnexure,
+        # not the generic CanApprove. This separates annexure sign-off
+        # (Commercial HOD's responsibility) from quotation approval
+        # (regular HOD's responsibility) — same role can hold both, but
+        # only Commercial HOD has CanApproveAnnexure by default.
+        require_permission(MENU, "CanApproveAnnexure", ctx)
         ann = _get_annexure_or_403(db, annexure_id, ctx)
         if ann.status == "Approved":
             return _to_response(ann)

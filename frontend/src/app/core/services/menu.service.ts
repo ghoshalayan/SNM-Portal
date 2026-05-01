@@ -22,6 +22,10 @@ export interface MenuPermissionMap {
     canRevise: boolean;
     canTransferOwnership: boolean;
     canGenerateUnderOthers: boolean;
+    /** Granted only to the "Commercial HOD" role. Gates annexure
+     *  approval and lets the holder edit annexures even after they
+     *  are approved (override of the regular post-approval lock). */
+    canApproveAnnexure: boolean;
   };
 }
 
@@ -64,6 +68,7 @@ export class MenuService {
             canRevise: p.canRevise || false,
             canTransferOwnership: p.canTransferOwnership || false,
             canGenerateUnderOthers: p.canGenerateUnderOthers || false,
+            canApproveAnnexure: p.canApproveAnnexure || false,
           };
         }
       }),

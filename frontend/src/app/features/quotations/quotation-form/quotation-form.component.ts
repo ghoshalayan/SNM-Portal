@@ -403,6 +403,7 @@ export interface VersionEntry {
                   *ngIf="quotationId && annexureTabUnlocked"
                   [quotId]="quotationId"
                   [canApprove]="canApprove"
+                  [canApproveAnnexure]="canApproveAnnexure"
                   [readOnly]="isLocked"
                   (stageChanged)="onSubStageChanged()">
                 </app-quotation-annexure>
@@ -676,6 +677,10 @@ export class QuotationFormComponent implements OnInit {
   canApprove = false;
   canRevise = false;
   canTransferOwnership = false;
+  /** Granted only to the Commercial HOD role. Gates the annexure
+   *  approve button AND lets the holder edit annexures even after
+   *  they're approved. */
+  canApproveAnnexure = false;
   currentOwnerUserId: number | null = null;
   isLocked = false;
   isMatured = false;
@@ -749,6 +754,7 @@ export class QuotationFormComponent implements OnInit {
     this.canRevise = this.menuService.hasPermission('Quotations', 'canRevise')
       || this.menuService.hasPermission('Quotations', 'canEdit');
     this.canTransferOwnership = this.menuService.hasPermission('Quotations', 'canTransferOwnership');
+    this.canApproveAnnexure = this.menuService.hasPermission('Quotations', 'canApproveAnnexure');
     this.buildForm();
     this.loadDropdowns();
 

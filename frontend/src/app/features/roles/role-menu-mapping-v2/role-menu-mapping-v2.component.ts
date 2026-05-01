@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, DestroyRef, HostListener, inject, OnInit } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
@@ -43,7 +43,7 @@ import { RoleSettingsPanelComponent } from './role-settings-panel.component';
   selector: 'app-role-menu-mapping-v2',
   standalone: true,
   imports: [
-    CommonModule,
+    CommonModule, RouterLink,
     MatButtonModule, MatCardModule, MatIconModule, MatProgressSpinnerModule,
     MatTabsModule, MatTooltipModule, MatDialogModule,
     RoleSettingsPanelComponent,
@@ -74,6 +74,11 @@ import { RoleSettingsPanelComponent } from './role-settings-panel.component';
           </span>
         }
 
+        <button mat-stroked-button
+          [routerLink]="['/roles', roleId, 'menu-mapping']"
+          matTooltip="Open the classic permissions UI (kept around as a fallback)">
+          <mat-icon>history</mat-icon> Classic UI
+        </button>
         <button mat-stroked-button (click)="openCompare()" matTooltip="Compare roles side by side">
           <mat-icon>compare</mat-icon> Compare
         </button>
@@ -302,6 +307,10 @@ export class RoleMenuMappingV2Component implements OnInit {
       canRevise: !!p.canRevise,
       canTransferOwnership: !!p.canTransferOwnership,
       canGenerateUnderOthers: !!p.canGenerateUnderOthers,
+      // Backend's Pydantic model defaults missing fields to false, so
+      // omitting this from the payload silently *unsets* whatever the
+      // user had toggled. Any new extended flag must round-trip here.
+      canApproveAnnexure: !!p.canApproveAnnexure,
     }));
 
     forkJoin({
@@ -387,6 +396,7 @@ export class RoleMenuMappingV2Component implements OnInit {
         target.canRevise = copied.canRevise;
         target.canTransferOwnership = copied.canTransferOwnership;
         target.canGenerateUnderOthers = copied.canGenerateUnderOthers;
+        target.canApproveAnnexure = copied.canApproveAnnexure;
       }
       this.flatPermissions = [...this.flatPermissions];
       this.recomputeConflicts();

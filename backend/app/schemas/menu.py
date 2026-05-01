@@ -53,6 +53,7 @@ class RoleMenuPermission(BaseModel):
     canRevise: bool = False
     canTransferOwnership: bool = False
     canGenerateUnderOthers: bool = False
+    canApproveAnnexure: bool = False
 
 
 class RoleMenuPermissionResponse(BaseModel):
@@ -67,6 +68,7 @@ class RoleMenuPermissionResponse(BaseModel):
     canRevise: bool = False
     canTransferOwnership: bool = False
     canGenerateUnderOthers: bool = False
+    canApproveAnnexure: bool = False
 
     class Config:
         from_attributes = True
