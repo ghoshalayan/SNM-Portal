@@ -1,0 +1,154 @@
+.app-container {
+  height: 100vh;
+
+  // Make sidenav container transparent so body bg image shows through
+  &.mat-drawer-container {
+    background: transparent !important;
+  }
+}
+
+// Sidenav content area
+:host ::ng-deep .mat-drawer-content {
+  background: transparent !important;
+}
+
+.app-sidenav {
+  width: 260px;
+  background: var(--snm-glass-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid var(--snm-glass-border);
+  box-shadow: 4px 0 24px var(--snm-glass-shadow-light);
+}
+
+/* Smooth slide-in / slide-out for the side sidenav and its
+   companion content shift. Material's defaults are already animated, but
+   the timing function reads as too snappy on light hardware — these
+   rules use a longer (300 ms) cubic-bezier curve consistently for both
+   the drawer's transform and the content's margin so they reflow as one
+   unit. ``::ng-deep`` is needed because ``.mat-mdc-sidenav-content``
+   lives outside the component view-encapsulated tree.
+
+   ``cdk-transitions-disabled`` is the class Angular CDK toggles during
+   user-driven dragging or programmatic 'instant' opens; respecting it
+   keeps Material's no-animation paths working. */
+:host ::ng-deep {
+  .mat-drawer.mat-drawer-side {
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                visibility 0s linear 300ms;
+    will-change: transform;
+  }
+  .mat-drawer.mat-drawer-side.mat-drawer-opened {
+    transition-delay: 0s;
+    visibility: visible;
+  }
+  .mat-drawer-content {
+    transition: margin-left 300ms cubic-bezier(0.4, 0, 0.2, 1),
+                margin-right 300ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+    will-change: margin-left;
+  }
+  .cdk-transitions-disabled {
+    .mat-drawer.mat-drawer-side,
+    .mat-drawer-content { transition: none !important; }
+  }
+}
+
+.sidenav-header {
+  padding: 1.25rem 1rem;
+  text-align: center;
+  border-bottom: 1px solid var(--snm-glass-border-light);
+
+  h3 {
+    margin: 0;
+    font-weight: 700;
+    color: var(--snm-text-primary);
+    font-size: 1.15rem;
+    letter-spacing: 0.5px;
+  }
+}
+
+.app-toolbar {
+  position: sticky;
+  top: 0;
+  // z-index 100 sits above every in-page stacking context (sticky table
+  // headers / columns use 2–3, card shadows & the stepper live in the single
+  // digits, our search-select overlay uses 1000 but is fixed-positioned
+  // below the toolbar anyway). Staying below Material's CDK overlay
+  // container (default 1000+) keeps mat-dialog / mat-menu / mat-select
+  // panels on top so they can still hide the bar when appropriate.
+  z-index: 100;
+  background: var(--snm-glass-bg) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--snm-glass-border-light);
+  box-shadow: 0 2px 16px var(--snm-glass-shadow-light);
+  color: var(--snm-text-primary);
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+// Theme toggle button
+.theme-toggle-btn {
+  color: var(--snm-text-muted) !important;
+  transition: color 0.3s ease;
+
+  &:hover {
+    color: var(--snm-accent) !important;
+  }
+}
+
+// Profile avatar button in toolbar
+.profile-avatar-btn.mat-mdc-icon-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  margin-left: 8px;
+
+  .mat-mdc-button-touch-target {
+    width: 40px;
+    height: 40px;
+  }
+
+  .avatar-small {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--snm-avatar-gradient-start), var(--snm-avatar-gradient-end));
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 600;
+    box-shadow: 0 0 8px var(--snm-avatar-shadow);
+    transition: box-shadow 0.2s;
+    position: relative;
+  }
+
+  &:hover .avatar-small {
+    box-shadow: 0 0 14px var(--snm-avatar-shadow);
+  }
+
+  .mat-mdc-button-persistent-ripple,
+  .mat-ripple {
+    border-radius: 50%;
+  }
+}
+
+.content-area {
+  padding: 1.5rem;
+  min-height: calc(100vh - 64px);
+}
+
+// Active menu item in sidebar
+.active {
+  background: var(--snm-accent-active) !important;
+  border-left: 3px solid var(--snm-accent);
+}

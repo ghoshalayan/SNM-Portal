@@ -1,0 +1,282 @@
+// Scoped under :host so styles don't leak
+:host {
+  display: block;
+}
+
+.line-items-panel {
+  border: 1px solid var(--snm-border-divider, #e0e0e0);
+  border-radius: 8px;
+  background: var(--snm-bg-card, #fff);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  &.expanded {
+    height: calc(100vh - 120px);   // fill available height (topbar ~64px + padding)
+  }
+
+  // ===== Toolbar =====
+  .panel-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--snm-border-divider, #e0e0e0);
+    background: var(--snm-bg-header-row, #fafafa); flex-shrink: 0;
+  }
+  .toolbar-left { display: flex; align-items: center; gap: 8px; }
+  .toolbar-icon { color: var(--snm-accent, #1976d2); font-size: 22px; }
+  .toolbar-title { font-size: 15px; font-weight: 600; color: var(--snm-text-primary, #212121); }
+  .item-count {
+    background: var(--snm-accent, #1976d2); color: #fff;
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px;
+  }
+  .toolbar-right { display: flex; align-items: center; gap: 12px; }
+  .gst-mode-toggle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 20px;
+    background: var(--snm-bg-panel, #f0f0f0);
+    border: 1px solid var(--snm-border-divider, #e0e0e0);
+  }
+  .gst-mode-label {
+    font-size: 11px; font-weight: 600; color: var(--snm-text-muted, #9e9e9e);
+    transition: color 0.2s;
+    &.active { color: var(--snm-accent, #1976d2); }
+  }
+  .gst-global-toggle { transform: scale(0.8); }
+  .toolbar-btn {
+    font-size: 12px; height: 34px; line-height: 34px;
+    padding: 0 12px; border-radius: 6px;
+    mat-icon { font-size: 18px; width: 18px; height: 18px; margin-right: 4px; }
+  }
+  .fetch-btn { border-color: var(--snm-accent, #1976d2); color: var(--snm-accent, #1976d2); }
+  .add-btn { border-color: #43a047; color: #43a047; }
+  .excel-btn { border-color: #1d6f42; color: #1d6f42;
+    mat-icon { color: #1d6f42; }
+  }
+  .toolbar-icon-btn {
+    width: 34px; height: 34px;
+    mat-icon { font-size: 20px; }
+  }
+
+  // ===== Loading =====
+  .loading-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 32px; justify-content: center;
+    color: var(--snm-text-secondary, #616161);
+  }
+
+  // ===== Table =====
+  .table-scroll {
+    flex: 1; overflow: auto; min-height: 200px;
+  }
+  &.expanded .table-scroll { min-height: 0; }
+
+  .line-items-table {
+    width: max-content; min-width: 100%;
+    border-collapse: separate; border-spacing: 0;
+  }
+
+  // Header cells
+  th.mat-header-cell {
+    background: var(--snm-bg-header-row, #f5f5f5);
+    color: var(--snm-text-secondary, #424242);
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.3px;
+    white-space: nowrap; padding: 8px 10px !important;
+    border-bottom: 2px solid var(--snm-border-divider, #e0e0e0);
+    border-right: 1px solid var(--snm-border-divider, #eee);
+    position: sticky; top: 0; z-index: 2;
+  }
+
+  // Data cells
+  td.mat-cell {
+    padding: 6px 10px !important; font-size: 13px;
+    color: var(--snm-text-primary, #212121);
+    border-bottom: 1px solid var(--snm-border-divider, #f0f0f0);
+    border-right: 1px solid var(--snm-border-divider, #f5f5f5);
+    vertical-align: middle; white-space: nowrap;
+  }
+
+  // ----- Sticky (frozen) columns -----
+  // #, Item / Grade, Dia → anchored left
+  // EX/FOR Price, Actions → anchored right
+  // All backgrounds use opaque theme-aware vars so scrolling content
+  // never bleeds through in either dark or light mode.
+  $sticky-cols:
+    '.mat-column-index',
+    '.mat-column-itemGradeName',
+    '.mat-column-itemDia',
+    '.mat-column-totAmount',
+    '.mat-column-actions';
+
+  @each $c in $sticky-cols {
+    th#{$c} {
+      z-index: 3;
+      background-color: var(--snm-sticky-bg) !important;
+      color: var(--snm-text-primary) !important;
+    }
+    td#{$c} {
+      z-index: 1;
+      background-color: var(--snm-sticky-bg) !important;
+      color: var(--snm-text-primary) !important;
+    }
+    // Hover state
+    tr.mat-mdc-row:hover td#{$c} {
+      background-color: var(--snm-sticky-hover-bg) !important;
+    }
+    // Editing row
+    .editing-row td#{$c} {
+      background-color: var(--snm-sticky-editing-bg) !important;
+    }
+    // Dirty (unsaved) row
+    .dirty-row td#{$c} {
+      background-color: var(--snm-sticky-dirty-bg) !important;
+    }
+  }
+
+  // Subtle edge shadows so frozen columns lift off the scroll area
+  th.mat-column-itemDia,
+  td.mat-column-itemDia {
+    box-shadow: 4px 0 6px -3px rgba(0, 0, 0, 0.12);
+  }
+  th.mat-column-totAmount,
+  td.mat-column-totAmount {
+    box-shadow: -4px 0 6px -3px rgba(0, 0, 0, 0.12);
+  }
+
+  // Column sizes
+  .col-index { width: 40px; text-align: center; }
+  .col-item { min-width: 140px; }
+  .col-dia, .col-len { min-width: 95px; }
+  .col-unit { min-width: 65px; }
+  .col-qty { min-width: 75px; }
+  .col-cost { min-width: 85px; text-align: right; }
+  .col-total { min-width: 105px; text-align: right; }
+  .col-gst { min-width: 120px; text-align: right; }
+  .col-exfor { min-width: 110px; text-align: right; }
+  .col-dispatch { min-width: 130px; }
+  .col-actions { width: 76px; text-align: center; }
+  .item-name-tag {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    background: var(--snm-accent-subtle, rgba(25,118,210,.08));
+    color: var(--snm-accent, #1976d2);
+    padding: 1px 6px; border-radius: 3px; margin-right: 4px;
+  }
+
+  // Display values
+  .display-val { display: block; padding: 4px 0; min-height: 24px; line-height: 24px; }
+  .display-val.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  // Inline fields (dropdowns)
+  .inline-field {
+    margin: 0 !important; width: 100%;
+    ::ng-deep .mat-mdc-form-field-infix { padding: 4px 0 !important; min-height: 32px !important; }
+    ::ng-deep .mat-mdc-text-field-wrapper { padding: 0 8px !important; }
+    ::ng-deep .mdc-notched-outline__leading,
+    ::ng-deep .mdc-notched-outline__trailing,
+    ::ng-deep .mdc-notched-outline__notch { border-color: var(--snm-border-field, #bdbdbd) !important; }
+    // Match the data-cell font size so rows don't jump when switching
+    // between display and edit modes.
+    ::ng-deep .mat-mdc-select-value-text { font-size: 13px; }
+  }
+  .field-md { max-width: 160px; }
+  .field-sm { max-width: 110px; }
+  .field-xs { max-width: 80px; }
+
+  // Inline number inputs — same font-size as display values so rows
+  // don't shift vertically on enter-edit.
+  .inline-num {
+    width: 78px; height: 30px;
+    border: 1px solid var(--snm-border-field, #bdbdbd);
+    border-radius: 4px; padding: 2px 6px;
+    font-size: 13px; text-align: right;
+    background: var(--snm-bg-card, #fff);
+    color: var(--snm-text-primary, #212121);
+    outline: none; font-variant-numeric: tabular-nums;
+    &:focus { border-color: var(--snm-accent, #1976d2); box-shadow: 0 0 0 2px rgba(25,118,210,.12); }
+    &::-webkit-inner-spin-button { opacity: 0.4; }
+  }
+
+  // TP highlight
+  .tp-highlight { background: rgba(25,118,210,.06); }
+  .tp-input { border-color: var(--snm-accent, #1976d2) !important; font-weight: 500; }
+
+  // Locked cells (Freight Trailer / Truck when delivery term ≠ FOR).
+  // Diagonal hash + greyed bg makes the read-only state immediately
+  // distinguishable from a user-typed 0.
+  th.locked-col {
+    background: var(--snm-bg-panel, #f5f5f5) !important;
+    color: var(--snm-text-muted) !important;
+    font-style: italic;
+  }
+  td.locked-cell {
+    background: repeating-linear-gradient(
+      135deg,
+      rgba(0,0,0,0.03),
+      rgba(0,0,0,0.03) 4px,
+      transparent 4px,
+      transparent 8px
+    );
+    color: var(--snm-text-muted, #9e9e9e) !important;
+    font-style: italic;
+  }
+
+  // Row states
+  .editing-row td.mat-cell { background: rgba(25,118,210,.03); }
+  .dirty-row td.mat-cell { background: rgba(255,193,7,.06); }
+  tr.mat-mdc-row:hover td.mat-cell { background: rgba(0,0,0,.02); }
+  .editing-row:hover td.mat-cell { background: rgba(25,118,210,.05); }
+
+  // GST cell
+  .gst-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .gst-amount { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .gst-toggle { transform: scale(0.75); transform-origin: right center; }
+  .gst-label { font-size: 11px; font-weight: 600; }
+  .gst-mode-badge {
+    font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+    background: var(--snm-bg-panel, #f0f0f0); color: var(--snm-text-secondary, #616161);
+  }
+
+  // EX/FOR
+  .exfor-val { color: var(--snm-accent-dark, #0d47a1); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+  // Actions
+  .action-group { display: flex; gap: 2px; justify-content: center; }
+  .action-btn {
+    width: 32px; height: 32px; line-height: 32px;
+    mat-icon { font-size: 18px; width: 18px; height: 18px; }
+  }
+  .edit-btn { color: var(--snm-accent, #1976d2); }
+  .delete-btn { color: var(--snm-error, #e53935); }
+  .save-btn { color: #43a047; }
+  .cancel-btn { color: var(--snm-text-muted, #9e9e9e); }
+
+  // Empty state
+  .empty-state { text-align: center !important; }
+  .empty-content {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 48px 24px; color: var(--snm-text-muted, #9e9e9e);
+    mat-icon { font-size: 52px; width: 52px; height: 52px; margin-bottom: 12px; opacity: 0.5; }
+    h4 { margin: 0 0 8px; font-size: 16px; color: var(--snm-text-secondary, #616161); }
+    p { margin: 0; font-size: 13px; }
+  }
+
+  // Footer
+  .panel-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--snm-border-divider, #e0e0e0);
+    background: var(--snm-bg-header-row, #fafafa);
+    display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+  }
+  .summary-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .summary-label { color: var(--snm-text-secondary, #616161); font-weight: 500; }
+  .summary-val {
+    font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--snm-text-primary, #212121);
+    &.highlight { color: var(--snm-accent-dark, #0d47a1); font-size: 14px; }
+  }
+  .summary-sep { color: var(--snm-text-muted, #bdbdbd); }
+  .footer-hint {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--snm-text-muted, #9e9e9e);
+  }
+  .hint-icon { font-size: 14px; width: 14px; height: 14px; vertical-align: middle; }
+}

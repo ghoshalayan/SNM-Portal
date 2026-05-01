@@ -1,0 +1,485 @@
+.chat-panel {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  /* Fill whatever bounded box the host gives us — the page or drawer
+     above is responsible for capping the height. ``min-height: 0`` is
+     required so this grid node doesn't itself stretch when its
+     contents overflow. */
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  background: var(--snm-bg-card, #fff);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--snm-border-divider, #e0e0e0);
+  &.compact {
+    grid-template-columns: 1fr; // sessions list hidden
+  }
+}
+
+/* Sessions sidebar */
+.sessions {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--snm-border-divider, #e0e0e0);
+  background: var(--snm-bg-panel, #f7f8fa);
+}
+.sessions-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--snm-border-divider, #e0e0e0);
+  strong { color: var(--snm-text-primary); }
+}
+.sessions-list {
+  list-style: none; margin: 0; padding: 6px 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+.session-row {
+  display: flex; align-items: center;
+  padding: 8px 8px 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  &:hover { background: rgba(74, 144, 226, 0.06); }
+  &.active {
+    background: rgba(74, 144, 226, 0.14);
+  }
+}
+.session-main {
+  flex: 1; min-width: 0;
+  .session-title {
+    font-weight: 500; font-size: 0.9rem;
+    color: var(--snm-text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .session-meta {
+    color: var(--snm-text-muted); font-size: 0.7rem;
+    margin-top: 2px;
+  }
+}
+.empty { color: var(--snm-text-muted); padding: 16px; font-size: 0.85rem; text-align: center; }
+
+/* Conversation column is a flex container — header (fixed), messages
+   (scrollable), composer (fixed). ``min-height: 0`` is the critical
+   bit: without it, ``.messages`` flex: 1 with overflow-y: auto can't
+   shrink below its content size, so the whole panel grows and the
+   page itself scrolls instead of the messages list. */
+.conversation {
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  height: 100%;
+}
+.conv-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--snm-border-divider, #e0e0e0);
+  strong { color: var(--snm-text-primary); }
+  .spacer { flex: 1; }
+}
+
+.placeholder {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 32px;
+  color: var(--snm-text-muted);
+  text-align: center;
+  mat-icon { font-size: 48px; width: 48px; height: 48px; color: var(--snm-accent, #4a90e2); opacity: 0.6; }
+  h3 { margin: 12px 0 4px; color: var(--snm-text-primary); }
+  p { max-width: 420px; margin: 0 0 16px; font-size: 0.9rem; }
+}
+
+.messages {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  // Smooth follow-along scroll while the response types out — every
+  // ``scrollTo({behavior:'smooth'})`` call (see chat-panel.component.ts
+  // ngAfterViewChecked) animates instead of snapping.
+  scroll-behavior: smooth;
+  padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.msg {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  max-width: 95%;
+  &.user {
+    align-self: flex-end;
+    background: rgba(74, 144, 226, 0.10);
+    border: 1px solid rgba(74, 144, 226, 0.2);
+  }
+  &.assistant {
+    align-self: flex-start;
+    background: var(--snm-bg-panel, #fafbfc);
+    border: 1px solid var(--snm-border-divider, #e0e0e0);
+  }
+  &.failed {
+    border-color: var(--snm-error, #e53935);
+    background: rgba(229, 57, 53, 0.05);
+  }
+}
+.msg-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.78rem; color: var(--snm-text-muted);
+  .role-icon {
+    font-size: 16px; width: 16px; height: 16px;
+    color: var(--snm-accent, #4a90e2);
+  }
+  .role-name { font-weight: 600; color: var(--snm-text-primary); }
+}
+.msg-text {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  color: var(--snm-text-primary); line-height: 1.45;
+}
+/* Blinking caret next to the partial text while the assistant message
+   is being typed out (Claude / ChatGPT style). The caret is part of the
+   same paragraph so it sits inline with the last word. */
+.msg-text.typing { color: var(--snm-text-primary); }
+.typing-caret {
+  display: inline-block;
+  width: 8px; height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--snm-accent);
+  border-radius: 1px;
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+@keyframes caret-blink {
+  to { opacity: 0; }
+}
+
+.sql-block {
+  margin-top: 4px;
+  background: var(--snm-bg-card, white);
+  border: 1px solid var(--snm-border-divider, #e0e0e0);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sql-label {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 8px;
+  background: var(--snm-bg-panel, #f0f1f3);
+  font-size: 0.7rem; color: var(--snm-text-muted);
+  letter-spacing: 0.5px; text-transform: uppercase;
+  mat-icon { font-size: 14px; width: 14px; height: 14px; }
+}
+.sql-block pre {
+  margin: 0; padding: 8px 10px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word;
+  color: var(--snm-text-secondary);
+}
+
+.chart-block {
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--snm-bg-card, white);
+  border: 1px solid var(--snm-border-divider, #e0e0e0);
+  border-radius: 4px;
+  /* Cap the chart height so a long bar list doesn't push the result
+     table off-screen — overflow is scrollable. */
+  max-height: 360px; overflow: auto;
+}
+
+.msg-actions {
+  display: flex; gap: 8px; margin-top: 6px;
+}
+
+/* B3 — insight narrative (auto-analysis of the result). */
+.insight-block {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: rgba(74, 144, 226, 0.06);
+  border: 1px solid rgba(74, 144, 226, 0.2);
+  border-left: 3px solid var(--snm-accent, #4a90e2);
+  border-radius: 4px;
+}
+.insight-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; color: var(--snm-accent, #4a90e2);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  mat-icon { font-size: 14px; width: 14px; height: 14px; }
+}
+.insight-text {
+  margin: 0; font-size: 0.92rem; line-height: 1.5;
+  color: var(--snm-text-primary);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* B3 — recommendation chips. */
+.recommendations {
+  margin-top: 8px;
+}
+.rec-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; color: var(--snm-text-muted);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  mat-icon { font-size: 14px; width: 14px; height: 14px; }
+}
+
+/* B3 — rolling summary banner shown above messages once compaction kicks in. */
+.summary-banner {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--snm-bg-panel, #fafbfc);
+  border: 1px dashed var(--snm-border-divider, #e0e0e0);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; color: var(--snm-text-muted);
+    mat-icon { font-size: 16px; width: 16px; height: 16px; }
+  }
+  p {
+    margin: 8px 0 0;
+    color: var(--snm-text-secondary);
+    line-height: 1.5;
+  }
+}
+
+.result-block {
+  margin-top: 4px;
+  background: var(--snm-bg-card, white);
+  border: 1px solid var(--snm-border-divider, #e0e0e0);
+  border-radius: 4px;
+  max-height: 280px; overflow: auto;
+}
+.result-table { width: 100%; }
+.truncated {
+  margin: 4px 8px;
+  font-size: 0.7rem; color: var(--snm-text-muted); font-style: italic;
+}
+
+.error {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: rgba(229, 57, 53, 0.08);
+  border-radius: 4px;
+  color: var(--snm-error, #c62828); font-size: 0.85rem;
+  mat-icon { font-size: 18px; width: 18px; height: 18px; }
+}
+
+.steps {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  summary {
+    display: flex; align-items: center; gap: 4px;
+    cursor: pointer; color: var(--snm-text-muted);
+    mat-icon { font-size: 14px; width: 14px; height: 14px; }
+  }
+  ol {
+    margin: 4px 0 0 20px; padding: 0;
+    color: var(--snm-text-secondary);
+  }
+  .step-latency { color: var(--snm-text-muted); }
+}
+
+.thinking {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  color: var(--snm-text-muted); font-size: 0.85rem; font-style: italic;
+  mat-icon { color: var(--snm-accent); }
+  .spin {
+    animation: chat-spin 1.2s linear infinite;
+  }
+}
+@keyframes chat-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Live agent timeline — Claude-Code-style step-by-step trace shown
+   while a turn is in flight. Completed steps fade in from below; the
+   pulsing tail row shows what the agent is doing right now. */
+.agent-timeline {
+  margin: 8px 0 4px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--snm-glass-bg-medium, rgba(255,255,255,0.5));
+  border: 1px solid var(--snm-glass-border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.agent-step {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  animation: agent-step-in 0.22s ease-out both;
+
+  .step-icon {
+    font-size: 18px; width: 18px; height: 18px;
+    color: var(--snm-accent-dark);
+  }
+  .step-body { min-width: 0; }
+  .step-label {
+    color: var(--snm-text-primary);
+    font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .step-detail {
+    color: var(--snm-text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .step-latency {
+    color: var(--snm-text-muted);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &.done .step-icon { color: var(--snm-accent); }
+
+  // Final answer + abort steps get coloured icons so they're scannable.
+  &.done .step-icon[data-icon="check_circle"] { color: #2e7d32; }
+  &.done .step-icon[data-icon="error_outline"],
+  &.done .step-icon[data-icon="cancel"] { color: var(--snm-error); }
+
+  // The bottom pulsing row — never settles until a 'done' or 'error'
+  // event closes the timeline, so the user has a clear "still working"
+  // signal even between agent steps.
+  &.pending {
+    background: var(--snm-accent-subtle);
+    .step-icon { color: var(--snm-accent); }
+    .step-label { color: var(--snm-text-secondary); font-style: italic; }
+    animation: agent-step-pulse 1.6s ease-in-out infinite;
+    .spin { animation: chat-spin 1.2s linear infinite; }
+  }
+}
+
+@keyframes agent-step-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes agent-step-pulse {
+  0%, 100% { background: var(--snm-accent-subtle); }
+  50%      { background: var(--snm-accent-active); }
+}
+
+/* Composer — pinned at the bottom, modeled on ChatGPT/Claude's input:
+   a single rounded shell holding the textarea, with a circular action
+   button absolutely-positioned in the bottom-right corner. The action
+   button cycles through three states: idle (disabled) → ready (primary
+   up-arrow) → pending (stop icon while a turn is in flight). */
+.composer {
+  flex: 0 0 auto;
+  padding: 14px 16px 12px;
+  border-top: 1px solid var(--snm-border-divider, #e0e0e0);
+  background: var(--snm-bg-card, #fff);
+}
+
+.composer-shell {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1.5px solid var(--snm-border-field);
+  border-radius: 18px;
+  background: var(--snm-glass-bg-solid, #fff);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+
+  // Hover gives a subtle lift; focus-within is the strong "active" cue.
+  &:hover { border-color: var(--snm-accent-dark); }
+  &:focus-within {
+    border-color: var(--snm-accent);
+    box-shadow: 0 0 0 3px var(--snm-accent-subtle);
+  }
+  &.is-pending {
+    border-color: var(--snm-accent-dark);
+    box-shadow: 0 0 0 3px var(--snm-accent-subtle);
+  }
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 56px 12px 18px;   // right padding leaves room for the action button
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--snm-text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: inherit;
+
+  &::placeholder { color: var(--snm-text-muted); }
+  &:disabled { color: var(--snm-text-muted); cursor: not-allowed; }
+}
+
+.composer-action {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--snm-accent-subtle);
+  color: var(--snm-text-muted);
+  cursor: not-allowed;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease;
+
+  mat-icon {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+    color: inherit;
+  }
+
+  // Ready (has text + not pending). The is-ready class is set on the
+  // shell, so we cascade that to the button via the .composer-shell.is-ready
+  // selector — keeps the disabled/active toggling out of [class.*] glue.
+  &:not([disabled]) {
+    background: var(--snm-accent);
+    color: var(--snm-text-on-primary);
+    cursor: pointer;
+    box-shadow: 0 2px 10px var(--snm-accent-shadow);
+  }
+  &:not([disabled]):hover {
+    background: var(--snm-accent-dark);
+    transform: translateY(-1px);
+  }
+  &:not([disabled]):active { transform: translateY(0); }
+}
+
+// Pending state — switch to a soft red "stop" affordance with a gentle
+// pulse so the user can see something is in progress and that clicking
+// will halt it.
+.composer-shell.is-pending .composer-action {
+  background: var(--snm-error) !important;
+  color: var(--snm-text-on-primary) !important;
+  cursor: pointer;
+  box-shadow: 0 0 0 0 rgba(198, 40, 40, 0.5);
+  animation: composer-pulse 1.4s ease-in-out infinite;
+  &:hover { background: #8e1c1c !important; }
+}
+
+@keyframes composer-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(198, 40, 40, 0.45); }
+  50%      { box-shadow: 0 0 0 6px rgba(198, 40, 40, 0); }
+}
+
+.composer-hint {
+  margin-top: 6px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--snm-text-muted);
+  text-align: right;
+}

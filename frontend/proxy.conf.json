@@ -1,0 +1,7 @@
+{
+  "/api": {
+    "target": "https://app.srmb.co.in",
+    "secure": true,
+    "changeOrigin": true
+  }
+}

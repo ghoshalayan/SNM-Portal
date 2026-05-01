@@ -1,0 +1,88 @@
+<div class="login-container">
+  <button
+    mat-icon-button
+    class="theme-toggle"
+    (click)="themeService.toggle()"
+    [matTooltip]="themeService.isDark() ? 'Switch to light mode' : 'Switch to dark mode'"
+  >
+    <mat-icon>{{ themeService.isDark() ? 'light_mode' : 'dark_mode' }}</mat-icon>
+  </button>
+
+  <div class="login-card">
+    <div class="card-header">
+      <div class="logo-icon">
+        <mat-icon>business</mat-icon>
+      </div>
+      <h1 class="card-title">S&amp;M Portal</h1>
+      <p class="card-subtitle">Sign in to your account</p>
+    </div>
+
+    <form [formGroup]="loginForm" (ngSubmit)="showCompanyPicker ? onSelectCompany() : onLogin()">
+      @if (!showCompanyPicker) {
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Username</mat-label>
+          <input matInput formControlName="userLogin" autocomplete="username" />
+          <mat-icon matPrefix>person</mat-icon>
+        </mat-form-field>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Password</mat-label>
+          <input
+            matInput
+            formControlName="password"
+            [type]="hidePassword ? 'password' : 'text'"
+            autocomplete="current-password"
+          />
+          <mat-icon matPrefix>lock</mat-icon>
+          <button mat-icon-button matSuffix type="button" (click)="hidePassword = !hidePassword">
+            <mat-icon>{{ hidePassword ? 'visibility_off' : 'visibility' }}</mat-icon>
+          </button>
+        </mat-form-field>
+      }
+
+      @if (showCompanyPicker) {
+        <p class="company-picker-label">Select a company to continue:</p>
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Company</mat-label>
+          <mat-select formControlName="companyId">
+            @for (company of companies; track company.companyId) {
+              <mat-option [value]="company.companyId">
+                {{ company.companyName }} ({{ company.roleName }})
+              </mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+      }
+
+      @if (error) {
+        <p class="error-message">{{ error }}</p>
+      }
+
+      <button
+        mat-raised-button
+        type="submit"
+        class="full-width login-button"
+        [disabled]="loading"
+      >
+        @if (loading) {
+          <mat-spinner diameter="20"></mat-spinner>
+        } @else {
+          {{ showCompanyPicker ? 'Continue' : 'Sign In' }}
+        }
+      </button>
+
+      @if (showCompanyPicker) {
+        <button
+          mat-button
+          type="button"
+          class="full-width back-button"
+          (click)="showCompanyPicker = false; error = ''"
+        >
+          Back to Login
+        </button>
+      }
+    </form>
+
+    <div class="footer-text">S&amp;M Portal &copy; 2026</div>
+  </div>
+</div>

@@ -1,0 +1,1402 @@
+// Include theming for Angular Material with `mat.theme()`.
+@use '@angular/material' as mat;
+
+// ========================
+// Theme CSS Custom Properties
+// ========================
+
+:root {
+  // --- Text ---
+  --snm-text-primary: #1a3a5c;
+  --snm-text-secondary: #2c5282;
+  --snm-text-tertiary: #2c3e50;
+  --snm-text-muted: rgba(26, 58, 92, 0.5);
+  --snm-text-faint: rgba(26, 58, 92, 0.4);
+  --snm-text-on-primary: #ffffff;
+
+  // --- Accent ---
+  --snm-accent: #5b8fd9;
+  --snm-accent-dark: #3a6bb5;
+  --snm-accent-hover: rgba(91, 143, 217, 0.1);
+  --snm-accent-active: rgba(91, 143, 217, 0.14);
+  --snm-accent-subtle: rgba(91, 143, 217, 0.08);
+  --snm-accent-shadow: rgba(90, 140, 220, 0.25);
+
+  // --- Glass surfaces ---
+  --snm-glass-bg: rgba(255, 255, 255, 0.35);
+  --snm-glass-bg-medium: rgba(255, 255, 255, 0.45);
+  --snm-glass-bg-heavy: rgba(255, 255, 255, 0.55);
+  --snm-glass-bg-solid: rgba(255, 255, 255, 0.75);
+  --snm-glass-bg-opaque: rgba(255, 255, 255, 0.8);
+  --snm-glass-border: rgba(255, 255, 255, 0.5);
+  --snm-glass-border-light: rgba(255, 255, 255, 0.4);
+  --snm-glass-border-heavy: rgba(255, 255, 255, 0.6);
+  --snm-glass-shadow: rgba(0, 0, 0, 0.08);
+  --snm-glass-shadow-light: rgba(0, 0, 0, 0.06);
+  --snm-glass-shadow-heavy: rgba(0, 0, 0, 0.12);
+  --snm-glass-inset: rgba(255, 255, 255, 0.6);
+  --snm-glass-paginator: rgba(255, 255, 255, 0.25);
+
+  // --- Backgrounds ---
+  --snm-bg-base: #e8edf5;
+  --snm-blob-1: rgba(91, 143, 217, 0.35);
+  --snm-blob-2: rgba(250, 112, 154, 0.25);
+  --snm-blob-3: rgba(120, 75, 168, 0.2);
+  --snm-bg-card: rgba(255, 255, 255, 0.45);
+  --snm-bg-header-row: rgba(100, 140, 200, 0.08);
+  --snm-bg-row-hover: rgba(100, 140, 200, 0.06);
+  --snm-bg-overlay: rgba(15, 30, 50, 0.3);
+  --snm-bg-node: #fff;
+  --snm-bg-panel: #fafbfc;
+
+  // --- Borders ---
+  --snm-border-field: rgba(26, 58, 92, 0.18);
+  --snm-border-divider: rgba(26, 58, 92, 0.1);
+  --snm-border-menu-sep: rgba(91, 143, 217, 0.08);
+
+  // --- Scrollbar ---
+  --snm-scrollbar-thumb: rgba(100, 140, 200, 0.2);
+  --snm-scrollbar-thumb-hover: rgba(100, 140, 200, 0.35);
+
+  // --- Skeleton ---
+  --snm-skeleton-from: rgba(26, 58, 92, 0.06);
+  --snm-skeleton-mid: rgba(26, 58, 92, 0.12);
+  --snm-skeleton-row-border: rgba(26, 58, 92, 0.04);
+  --snm-skeleton-header: rgba(26, 58, 92, 0.04);
+
+  // --- Status / Misc ---
+  --snm-error: #c62828;
+  --snm-error-bg: rgba(244, 67, 54, 0.1);
+  --snm-super-admin: #e65100;
+  --snm-avatar-gradient-start: #3a6bb5;
+  --snm-avatar-gradient-end: #5b8fd9;
+  --snm-avatar-shadow: rgba(58, 107, 181, 0.25);
+
+  // --- Sticky / pinned surfaces (must be fully opaque in both themes) ---
+  --snm-sticky-bg: #ffffff;
+  --snm-sticky-accent-bg: #e8eef9;
+  --snm-sticky-hover-bg: #eef2f8;
+  --snm-sticky-editing-bg: #e0edff;
+  --snm-sticky-dirty-bg: #fff4cf;
+
+  // Color scheme
+  color-scheme: light;
+}
+
+// ========================
+// Dark Theme Overrides
+// ========================
+
+body.dark-theme {
+  // --- Text ---
+  --snm-text-primary: #e0e6ed;
+  --snm-text-secondary: #b8c9dd;
+  --snm-text-tertiary: #a8bdd0;
+  --snm-text-muted: rgba(200, 215, 235, 0.55);
+  --snm-text-faint: rgba(200, 215, 235, 0.4);
+  --snm-text-on-primary: #ffffff;
+
+  // --- Accent ---
+  --snm-accent: #6fa3e8;
+  --snm-accent-dark: #5b8fd9;
+  --snm-accent-hover: rgba(111, 163, 232, 0.15);
+  --snm-accent-active: rgba(111, 163, 232, 0.2);
+  --snm-accent-subtle: rgba(111, 163, 232, 0.1);
+  --snm-accent-shadow: rgba(111, 163, 232, 0.3);
+
+  // --- Glass surfaces ---
+  --snm-glass-bg: rgba(15, 23, 42, 0.55);
+  --snm-glass-bg-medium: rgba(15, 23, 42, 0.65);
+  --snm-glass-bg-heavy: rgba(15, 23, 42, 0.7);
+  --snm-glass-bg-solid: rgba(15, 23, 42, 0.85);
+  --snm-glass-bg-opaque: rgba(15, 23, 42, 0.9);
+  --snm-glass-border: rgba(255, 255, 255, 0.1);
+  --snm-glass-border-light: rgba(255, 255, 255, 0.08);
+  --snm-glass-border-heavy: rgba(255, 255, 255, 0.15);
+  --snm-glass-shadow: rgba(0, 0, 0, 0.3);
+  --snm-glass-shadow-light: rgba(0, 0, 0, 0.2);
+  --snm-glass-shadow-heavy: rgba(0, 0, 0, 0.4);
+  --snm-glass-inset: rgba(255, 255, 255, 0.08);
+  --snm-glass-paginator: rgba(15, 23, 42, 0.5);
+
+  // --- Backgrounds ---
+  --snm-bg-base: #0f172a;
+  --snm-blob-1: rgba(47, 184, 255, 0.3);
+  --snm-blob-2: rgba(250, 112, 154, 0.2);
+  --snm-blob-3: rgba(92, 157, 241, 0.25);
+  --snm-bg-card: rgba(15, 23, 42, 0.6);
+  --snm-bg-header-row: rgba(111, 163, 232, 0.1);
+  --snm-bg-row-hover: rgba(111, 163, 232, 0.08);
+  --snm-bg-overlay: rgba(0, 0, 0, 0.5);
+  --snm-bg-node: rgba(20, 30, 50, 0.85);
+  --snm-bg-panel: rgba(10, 18, 32, 0.6);
+
+  // --- Borders ---
+  --snm-border-field: rgba(200, 215, 235, 0.15);
+  --snm-border-divider: rgba(200, 215, 235, 0.1);
+  --snm-border-menu-sep: rgba(111, 163, 232, 0.1);
+
+  // --- Scrollbar ---
+  --snm-scrollbar-thumb: rgba(111, 163, 232, 0.25);
+  --snm-scrollbar-thumb-hover: rgba(111, 163, 232, 0.4);
+
+  // --- Skeleton ---
+  --snm-skeleton-from: rgba(200, 215, 235, 0.06);
+  --snm-skeleton-mid: rgba(200, 215, 235, 0.12);
+  --snm-skeleton-row-border: rgba(200, 215, 235, 0.04);
+  --snm-skeleton-header: rgba(200, 215, 235, 0.04);
+
+  // --- Status / Misc ---
+  --snm-error: #ef5350;
+  --snm-error-bg: rgba(244, 67, 54, 0.15);
+  --snm-super-admin: #ff9800;
+  --snm-avatar-gradient-start: #5b8fd9;
+  --snm-avatar-gradient-end: #6fa3e8;
+  --snm-avatar-shadow: rgba(111, 163, 232, 0.3);
+
+  // --- Sticky / pinned surfaces ---
+  --snm-sticky-bg: #152238;
+  --snm-sticky-accent-bg: #1c2b48;
+  --snm-sticky-hover-bg: #1e2c48;
+  --snm-sticky-editing-bg: #1f3358;
+  --snm-sticky-dirty-bg: #3a2f0a;
+
+  color-scheme: dark;
+}
+
+// ========================
+// Angular Material Theme
+// ========================
+
+html {
+  height: 100%;
+  @include mat.theme(
+    (
+      color: (
+        primary: mat.$azure-palette,
+        tertiary: mat.$blue-palette,
+      ),
+      typography: Roboto,
+      density: 0,
+    )
+  );
+}
+
+body {
+  background: var(--snm-bg-base);
+  color: var(--snm-text-primary);
+  font: var(--mat-sys-body-medium);
+  margin: 0;
+  height: 100%;
+  transition: background 0.5s ease, color 0.3s ease;
+  overflow-x: hidden;
+}
+
+// ========================
+// Animated Blob Background
+// ========================
+// Pure CSS — no image dependency. Blobs float behind content
+// and adapt color to light/dark theme via CSS variables.
+
+.snm-blob-bg {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.snm-blob {
+  position: absolute;
+  border-radius: 50%;
+  mix-blend-mode: color-dodge;
+  filter: blur(80px);
+  opacity: 0.8;
+  will-change: transform;
+}
+
+.snm-blob--1 {
+  width: 55vmax; height: 55vmax;
+  background: var(--snm-blob-1);
+  animation: snm-drift-1 28s ease-in-out infinite alternate;
+}
+.snm-blob--2 {
+  width: 45vmax; height: 45vmax;
+  background: var(--snm-blob-2);
+  animation: snm-drift-2 32s ease-in-out infinite alternate;
+}
+.snm-blob--3 {
+  width: 40vmax; height: 40vmax;
+  background: var(--snm-blob-3);
+  animation: snm-drift-3 26s ease-in-out infinite alternate;
+}
+
+@keyframes snm-drift-1 {
+  0% {
+    transform: translate(-15vw, -10vh) rotate(0deg);
+    border-radius: 24% 76% 35% 65% / 27% 36% 64% 73%;
+  }
+  50% {
+    transform: translate(20vw, 15vh) rotate(45deg);
+    border-radius: 60% 40% 55% 45% / 50% 60% 40% 50%;
+  }
+  100% {
+    transform: translate(45vw, 5vh) rotate(-10deg);
+    border-radius: 76% 24% 33% 67% / 68% 55% 45% 32%;
+  }
+}
+
+@keyframes snm-drift-2 {
+  0% {
+    transform: translate(60vw, 60vh) rotate(10deg);
+    border-radius: 33% 67% 58% 42% / 63% 32% 68% 37%;
+  }
+  50% {
+    transform: translate(10vw, 30vh) rotate(-30deg);
+    border-radius: 50% 50% 40% 60% / 45% 55% 45% 55%;
+  }
+  100% {
+    transform: translate(40vw, -5vh) rotate(20deg);
+    border-radius: 42% 58% 70% 30% / 45% 65% 35% 55%;
+  }
+}
+
+@keyframes snm-drift-3 {
+  0% {
+    transform: translate(20vw, 70vh) rotate(-20deg);
+    border-radius: 45% 55% 62% 38% / 53% 38% 62% 47%;
+  }
+  50% {
+    transform: translate(55vw, 40vh) rotate(15deg);
+    border-radius: 55% 45% 35% 65% / 40% 60% 40% 60%;
+  }
+  100% {
+    transform: translate(-5vw, 20vh) rotate(-45deg);
+    border-radius: 65% 35% 55% 45% / 55% 40% 60% 45%;
+  }
+}
+
+// Ensure app content sits above the blobs
+app-root {
+  position: relative;
+  z-index: 1;
+}
+
+// ========================
+// Glassmorphism Utilities
+// ========================
+
+.glass {
+  background: var(--snm-glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--snm-glass-border);
+  box-shadow: 0 8px 32px var(--snm-glass-shadow);
+}
+
+.glass-light {
+  background: var(--snm-glass-bg-heavy);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--snm-glass-border-heavy);
+  box-shadow: 0 4px 24px var(--snm-glass-shadow-light);
+}
+
+// Glass mat-card override
+.mat-mdc-card {
+  background: var(--snm-bg-card) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--snm-glass-border-heavy);
+  box-shadow: 0 8px 32px var(--snm-glass-shadow-light) !important;
+  border-radius: 16px !important;
+}
+
+// Glass dialog panel
+.mat-mdc-dialog-surface {
+  background: var(--snm-glass-bg-medium) !important;
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 16px !important;
+  box-shadow:
+    0 8px 40px var(--snm-glass-shadow-heavy),
+    inset 0 1px 0 var(--snm-glass-inset) !important;
+}
+
+// Dialog backdrop - frosted overlay
+.cdk-overlay-dark-backdrop {
+  background: var(--snm-bg-overlay) !important;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+// Dialog title
+[mat-dialog-title] {
+  color: var(--snm-text-primary) !important;
+  font-weight: 600 !important;
+}
+
+// Dialog content text
+.mat-mdc-dialog-content {
+  color: var(--snm-text-tertiary) !important;
+}
+
+// Dialog actions area
+.mat-mdc-dialog-actions {
+  border-top: 1px solid var(--snm-glass-border-light);
+
+  // Plain (non-raised) action buttons like "Cancel" / "Skip". `text-muted`
+  // is 50% alpha — too washed-out for a primary action label, so use the
+  // secondary text colour for actual readability.
+  .mat-mdc-button:not(.mat-mdc-raised-button) {
+    color: var(--snm-text-secondary) !important;
+    font-weight: 500;
+
+    .mdc-button__label { color: var(--snm-text-secondary) !important; }
+
+    &:hover {
+      background: var(--snm-accent-hover) !important;
+    }
+  }
+}
+
+// Glass mat-table styling
+.mat-mdc-table {
+  background: transparent !important;
+}
+
+.mat-mdc-header-row {
+  background: var(--snm-bg-header-row) !important;
+}
+
+.mat-mdc-row {
+  &:hover {
+    background: var(--snm-bg-row-hover) !important;
+  }
+}
+
+.mat-mdc-header-cell {
+  color: var(--snm-text-primary) !important;
+}
+
+.mat-mdc-cell {
+  color: var(--snm-text-tertiary) !important;
+}
+
+// Card titles
+.mat-mdc-card-title {
+  color: var(--snm-accent-dark) !important;
+}
+
+// Page headers
+.page-header h2 {
+  color: var(--snm-text-primary);
+  text-shadow: none;
+  margin: 0;
+  font-weight: 600;
+}
+
+// No-data rows
+.no-data {
+  color: var(--snm-text-muted) !important;
+}
+
+// Buttons on glass
+.mat-mdc-raised-button.mat-primary {
+  background: linear-gradient(135deg, var(--snm-accent), var(--snm-accent-dark)) !important;
+  color: var(--snm-text-on-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 12px var(--snm-accent-shadow) !important;
+  transition: all 0.25s ease;
+
+  .mdc-button__label {
+    color: var(--snm-text-on-primary) !important;
+  }
+
+  mat-icon {
+    color: var(--snm-text-on-primary) !important;
+  }
+
+  &:hover:not([disabled]) {
+    box-shadow: 0 4px 16px var(--snm-accent-shadow) !important;
+    transform: translateY(-1px);
+  }
+}
+
+// Warn buttons (delete/confirm) — solid red background + white label so
+// destructive actions stay readable on the glass dialog surface.
+.mat-mdc-raised-button.mat-warn {
+  background: linear-gradient(135deg, var(--snm-error), #8e1c1c) !important;
+  color: var(--snm-text-on-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 12px rgba(198, 40, 40, 0.35) !important;
+
+  .mdc-button__label,
+  mat-icon {
+    color: var(--snm-text-on-primary) !important;
+  }
+
+  &:hover:not([disabled]) {
+    box-shadow: 0 4px 16px rgba(198, 40, 40, 0.45) !important;
+    transform: translateY(-1px);
+  }
+}
+
+// Dialog form fields on glass
+.mat-mdc-dialog-surface {
+  .mdc-text-field--outlined {
+    .mdc-notched-outline__leading,
+    .mdc-notched-outline__notch,
+    .mdc-notched-outline__trailing {
+      border-color: var(--snm-border-field) !important;
+    }
+  }
+
+  .mdc-text-field--outlined:not(.mdc-text-field--disabled).mdc-text-field--focused {
+    .mdc-notched-outline__leading,
+    .mdc-notched-outline__notch,
+    .mdc-notched-outline__trailing {
+      border-color: var(--snm-accent) !important;
+    }
+  }
+
+  .mat-mdc-input-element {
+    color: var(--snm-text-primary) !important;
+  }
+
+  .mat-mdc-floating-label {
+    color: var(--snm-text-muted) !important;
+  }
+
+  .mat-mdc-floating-label.mdc-floating-label--float-above {
+    color: var(--snm-accent-dark) !important;
+  }
+}
+
+// Form fields in cards (non-dialog)
+.mat-mdc-card {
+  .mdc-text-field--outlined {
+    .mdc-notched-outline__leading,
+    .mdc-notched-outline__notch,
+    .mdc-notched-outline__trailing {
+      border-color: var(--snm-border-field) !important;
+    }
+  }
+
+  .mdc-text-field--outlined:not(.mdc-text-field--disabled).mdc-text-field--focused {
+    .mdc-notched-outline__leading,
+    .mdc-notched-outline__notch,
+    .mdc-notched-outline__trailing {
+      border-color: var(--snm-accent) !important;
+    }
+  }
+
+  .mat-mdc-input-element {
+    color: var(--snm-text-primary) !important;
+  }
+
+  .mat-mdc-floating-label {
+    color: var(--snm-text-muted) !important;
+  }
+
+  .mat-mdc-floating-label.mdc-floating-label--float-above {
+    color: var(--snm-accent-dark) !important;
+  }
+}
+
+// ========================
+// Skeleton Loader
+// ========================
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--snm-skeleton-from) 25%,
+    var(--snm-skeleton-mid) 50%,
+    var(--snm-skeleton-from) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.skeleton-text {
+  @extend .skeleton;
+  height: 14px;
+  margin-bottom: 8px;
+}
+
+.skeleton-text-sm {
+  @extend .skeleton;
+  height: 10px;
+  margin-bottom: 6px;
+}
+
+.skeleton-heading {
+  @extend .skeleton;
+  height: 20px;
+  width: 60%;
+  margin-bottom: 12px;
+}
+
+.skeleton-avatar {
+  @extend .skeleton;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+
+.skeleton-button {
+  @extend .skeleton;
+  height: 36px;
+  width: 100px;
+  border-radius: 8px;
+}
+
+.skeleton-table-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--snm-skeleton-row-border);
+}
+
+.skeleton-cell {
+  @extend .skeleton;
+  height: 14px;
+  flex: 1;
+}
+
+.skeleton-cell-sm {
+  @extend .skeleton;
+  height: 14px;
+  width: 60px;
+  flex: none;
+}
+
+.skeleton-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  gap: 12px;
+}
+
+.skeleton-menu-icon {
+  @extend .skeleton;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.skeleton-menu-label {
+  @extend .skeleton;
+  height: 14px;
+  flex: 1;
+}
+
+// Glass mat-paginator
+.mat-mdc-paginator {
+  background: var(--snm-glass-paginator) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--snm-glass-border-light);
+  border-radius: 0 0 16px 16px;
+  color: var(--snm-text-primary) !important;
+
+  .mat-mdc-paginator-container {
+    color: var(--snm-text-primary);
+  }
+
+  .mat-mdc-select-value,
+  .mat-mdc-paginator-range-label {
+    color: var(--snm-text-muted) !important;
+  }
+
+  .mat-mdc-icon-button:not([disabled]) {
+    color: var(--snm-accent-dark) !important;
+  }
+
+  .mat-mdc-icon-button[disabled] {
+    color: var(--snm-text-faint) !important;
+  }
+
+  .mat-mdc-select-trigger {
+    color: var(--snm-text-primary) !important;
+  }
+}
+
+// Glass mat-select dropdown panel
+.mat-mdc-select-panel {
+  background: var(--snm-glass-bg-solid) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px var(--snm-glass-shadow) !important;
+
+  .mat-mdc-option {
+    color: var(--snm-text-primary) !important;
+
+    &:hover:not(.mdc-list-item--disabled),
+    &:focus:not(.mdc-list-item--disabled),
+    &.mdc-list-item--selected:not(.mdc-list-item--disabled) {
+      background: var(--snm-accent-active) !important;
+    }
+
+    &.mdc-list-item--selected:not(.mdc-list-item--disabled) {
+      .mdc-list-item__primary-text {
+        color: var(--snm-accent-dark) !important;
+      }
+    }
+  }
+}
+
+// Searchable select panel (user-location-dialog)
+.searchable-panel {
+  max-height: 350px !important;
+
+  .select-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--snm-border-divider, #e0e0e0);
+    position: sticky;
+    top: 0;
+    background: var(--snm-glass-bg-solid, #fff);
+    z-index: 1;
+
+    input {
+      border: none;
+      outline: none;
+      flex: 1;
+      font-size: 14px;
+      background: transparent;
+      color: var(--snm-text-primary, #333);
+
+      &::placeholder {
+        color: var(--snm-text-muted, #888);
+      }
+    }
+
+    .search-ico {
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+      color: var(--snm-text-muted, #888);
+    }
+  }
+
+  .select-all-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--snm-border-divider, #e0e0e0);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--snm-text-primary, #333);
+
+    &:hover {
+      background: var(--snm-accent-active, rgba(0, 0, 0, 0.04));
+    }
+
+    .sa-icon {
+      font-size: 20px;
+      width: 20px;
+      height: 20px;
+      color: var(--snm-accent, #1976d2);
+    }
+  }
+}
+
+// Glass profile menu panel
+.profile-menu-panel {
+  .mat-mdc-menu-content {
+    padding: 0 !important;
+  }
+
+  &.mat-mdc-menu-panel {
+    background: var(--snm-glass-bg-solid) !important;
+    backdrop-filter: blur(24px) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+    border: 1px solid var(--snm-glass-border) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 8px 32px var(--snm-glass-shadow-heavy) !important;
+    min-width: 240px !important;
+    overflow: hidden;
+  }
+
+  .profile-menu-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    cursor: default;
+  }
+
+  .avatar-medium {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--snm-avatar-gradient-start), var(--snm-avatar-gradient-end));
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 600;
+    box-shadow: 0 2px 12px var(--snm-avatar-shadow);
+    flex-shrink: 0;
+  }
+
+  .profile-menu-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .profile-menu-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--snm-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .profile-menu-role {
+    font-size: 12px;
+    color: var(--snm-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mat-mdc-menu-item {
+    color: var(--snm-text-primary) !important;
+
+    mat-icon {
+      color: var(--snm-accent-dark) !important;
+    }
+
+    &:hover {
+      background: var(--snm-accent-hover) !important;
+    }
+  }
+
+  .logout-item {
+    mat-icon {
+      color: var(--snm-error) !important;
+    }
+
+    &:hover {
+      background: var(--snm-error-bg) !important;
+    }
+  }
+
+  .mat-divider {
+    border-color: var(--snm-border-divider) !important;
+  }
+}
+
+// Glass mat-autocomplete panel
+.mat-mdc-autocomplete-panel {
+  background: var(--snm-glass-bg-solid) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px var(--snm-glass-shadow) !important;
+}
+
+// Glass mat-datepicker panel
+.mat-datepicker-content {
+  background: var(--snm-glass-bg-opaque) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 32px var(--snm-glass-shadow) !important;
+}
+
+// Scrollbar styling for glass UI
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--snm-scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--snm-scrollbar-thumb-hover);
+}
+
+// ========================
+// Dark-mode specific Material overrides
+// ========================
+
+body.dark-theme {
+  // Checkbox / radio / slide-toggle readability
+  .mat-mdc-checkbox .mdc-checkbox__background {
+    border-color: var(--snm-text-muted) !important;
+  }
+
+  .mat-mdc-slide-toggle .mdc-switch__track {
+    background: var(--snm-text-faint);
+  }
+
+  // Mat-menu items
+  .mat-mdc-menu-panel {
+    background: var(--snm-glass-bg-solid) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+  }
+
+  .mat-mdc-menu-item {
+    color: var(--snm-text-primary) !important;
+
+    &:hover {
+      background: var(--snm-accent-hover) !important;
+    }
+  }
+
+  // Tooltip
+  .mat-mdc-tooltip .mdc-tooltip__surface {
+    background: var(--snm-glass-bg-solid) !important;
+    color: var(--snm-text-primary) !important;
+  }
+
+  // Snackbar
+  .mat-mdc-snack-bar-container .mdc-snackbar__surface {
+    background: var(--snm-glass-bg-solid) !important;
+    color: var(--snm-text-primary) !important;
+  }
+}
+
+// ===== Quill font families (used by font attributor with style) =====
+.ql-font-arial { font-family: Arial, sans-serif; }
+.ql-font-times-new-roman { font-family: 'Times New Roman', serif; }
+.ql-font-calibri { font-family: Calibri, sans-serif; }
+.ql-font-georgia { font-family: Georgia, serif; }
+.ql-font-verdana { font-family: Verdana, sans-serif; }
+.ql-font-courier-new { font-family: 'Courier New', monospace; }
+.ql-font-trebuchet-ms { font-family: 'Trebuchet MS', sans-serif; }
+.ql-font-tahoma { font-family: Tahoma, sans-serif; }
+
+// ========================
+// Status Badges (unified)
+// ========================
+// Single source of truth for status chips/badges across Enquiry & Quotation
+// modules. Dark-mode compatible via rgba + border pattern.
+// Variants also apply to <mat-chip class="status-chip ...">.
+
+.status-badge,
+.status-chip {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+// mat-chip needs slight override for height
+mat-chip.status-chip {
+  min-height: 24px;
+  height: 24px;
+  line-height: 24px;
+  padding: 0 10px;
+}
+
+// --- Neutral ---
+.status-draft {
+  background: rgba(158, 158, 158, 0.15) !important;
+  color: var(--snm-text-secondary) !important;
+  border: 1px solid rgba(158, 158, 158, 0.3);
+}
+
+// --- Blue / Accent (new, open, revised) ---
+.status-new,
+.status-open {
+  background: rgba(21, 101, 192, 0.15) !important;
+  color: var(--snm-accent, #1565c0) !important;
+  border: 1px solid rgba(21, 101, 192, 0.3);
+}
+
+.status-revised {
+  background: rgba(21, 101, 192, 0.15) !important;
+  color: var(--snm-accent, #42a5f5) !important;
+  border: 1px solid rgba(21, 101, 192, 0.3);
+}
+
+// --- Orange (pending) ---
+.status-pending {
+  background: rgba(230, 81, 0, 0.15) !important;
+  color: #ffa726 !important;
+  border: 1px solid rgba(230, 81, 0, 0.3);
+}
+
+// --- Green (approved, quotation-prepared) ---
+.status-approved,
+.status-quotation-prepared {
+  background: rgba(46, 125, 50, 0.15) !important;
+  color: #4caf50 !important;
+  border: 1px solid rgba(46, 125, 50, 0.3);
+}
+
+// --- Deep green + bold (matured) ---
+.status-matured {
+  background: rgba(27, 94, 32, 0.2) !important;
+  color: #66bb6a !important;
+  border: 1px solid rgba(27, 94, 32, 0.4);
+  font-weight: 700 !important;
+}
+
+// --- Red (reject / rejected — both spellings) ---
+.status-reject,
+.status-rejected {
+  background: rgba(198, 40, 40, 0.15) !important;
+  color: #ef5350 !important;
+  border: 1px solid rgba(198, 40, 40, 0.3);
+}
+
+// --- Pink/Magenta (expired) ---
+.status-expired {
+  background: rgba(136, 14, 79, 0.15) !important;
+  color: #f06292 !important;
+  border: 1px solid rgba(136, 14, 79, 0.3);
+}
+
+// --- Post-matured lifecycle (viability → annexure) ---
+// Generated states use a teal tint; approved states graduate to stronger
+// green — visually signaling progression through the chain.
+.status-viability-generated,
+.status-annexure-generated {
+  background: rgba(0, 150, 136, 0.15) !important;
+  color: #26a69a !important;
+  border: 1px solid rgba(0, 150, 136, 0.3);
+}
+
+.status-viability-approved,
+.status-annexure-approved {
+  background: rgba(27, 94, 32, 0.2) !important;
+  color: #66bb6a !important;
+  border: 1px solid rgba(27, 94, 32, 0.4);
+  font-weight: 700 !important;
+}
+
+// ===== Server-search-select — make the absolute-positioned dropdown
+// visible on top of any sibling cards on the page.
+//
+// Two issues need solving together:
+//
+// 1. Overflow clipping — Material's mat-mdc-card has `overflow: hidden`
+//    to clip children past its rounded corners. Forcing overflow:visible
+//    on cards/content that contain a search-select lets the panel
+//    extend below the card boundary.
+//
+// 2. Stacking — mat-card uses `backdrop-filter: blur(20px)` for the
+//    glassmorphism look, which establishes its own stacking context.
+//    Inside that context, our host's z-index can't escape to beat
+//    sibling cards (e.g. the table card below the filter card).
+//    Solution: bump the *whole* filter card's z-index above its
+//    siblings, but only while a contained dropdown is open — so we
+//    don't permanently disturb the page's stacking order.
+mat-card:has(app-server-search-select),
+mat-card:has(app-server-search-select) > mat-card-content,
+mat-card:has(app-server-search-select) .mat-mdc-card-content,
+mat-card-content:has(app-server-search-select) {
+  overflow: visible !important;
+}
+
+mat-card:has(app-server-search-select .sss-root.is-open),
+.mat-mdc-card:has(app-server-search-select .sss-root.is-open) {
+  position: relative;
+  z-index: 1200 !important;
+}
+
+// ===== Column-picker menu (line items / viability grids) =====
+.col-picker-menu.mat-mdc-menu-panel {
+  min-width: 240px !important;
+  max-width: 280px !important;
+
+  .cp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--snm-border-divider);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--snm-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+
+    button {
+      font-size: 11px;
+      min-width: 0;
+      padding: 0 8px;
+      line-height: 24px;
+    }
+  }
+
+  .cp-body {
+    max-height: 360px;
+    overflow-y: auto;
+    padding: 6px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .cp-item {
+    font-size: 13px;
+    padding: 4px 0;
+  }
+}
+
+// ===== Fullscreen dialog panel =====
+.fullscreen-dialog .mat-mdc-dialog-container {
+  padding: 0;
+  border-radius: 0;
+}
+
+.fullscreen-dialog .mat-mdc-dialog-surface {
+  border-radius: 0 !important;
+}
+
+// ============================================================
+// Unified UI Components
+// ============================================================
+// Theme-driven, **cosmetic-only** overrides for the Material primitives
+// that didn't have global rules yet. The intent is consistency — every
+// input, dropdown, button, table, dialog body and pagination control
+// should look the same regardless of which feature module hosts it.
+//
+// SAFETY:
+//   • No component .ts or template files are edited; everything below is
+//     pure CSS so functionality stays untouched.
+//   • Modal width/height are explicitly NOT touched — those are tuned
+//     per-dialog. Only colours / borders / typography on the surface are.
+//   • All values resolve to --snm-* CSS custom properties so light/dark
+//     themes keep working without per-component variants.
+
+// ----- Form fields (global fallback) -----
+// The original rules were nested under .mat-mdc-dialog-surface and
+// .mat-mdc-card. Standalone form fields (e.g. on plain pages) inherited
+// Material defaults instead. This generic rule fills the gap — the
+// scoped versions still win on specificity inside cards/dialogs.
+.mdc-text-field--outlined {
+  .mdc-notched-outline__leading,
+  .mdc-notched-outline__notch,
+  .mdc-notched-outline__trailing {
+    border-color: var(--snm-border-field);
+  }
+}
+
+.mdc-text-field--outlined:not(.mdc-text-field--disabled).mdc-text-field--focused {
+  .mdc-notched-outline__leading,
+  .mdc-notched-outline__notch,
+  .mdc-notched-outline__trailing {
+    border-color: var(--snm-accent);
+  }
+}
+
+.mat-mdc-input-element { color: var(--snm-text-primary); }
+.mat-mdc-floating-label { color: var(--snm-text-muted); }
+.mat-mdc-floating-label.mdc-floating-label--float-above { color: var(--snm-accent-dark); }
+
+// Disabled fields — Material's default fades to near-invisible on glass;
+// muted secondary text reads better while still signalling "not editable".
+.mat-mdc-input-element:disabled,
+.mat-mdc-form-field-disabled .mat-mdc-input-element {
+  color: var(--snm-text-faint) !important;
+  -webkit-text-fill-color: var(--snm-text-faint) !important;
+}
+.mat-mdc-select-disabled .mat-mdc-select-value-text,
+.mat-mdc-select-disabled .mat-mdc-select-placeholder { color: var(--snm-text-faint) !important; }
+
+// Hint + error text — keep readable on glass.
+.mat-mdc-form-field-hint { color: var(--snm-text-muted) !important; }
+.mat-mdc-form-field-error { color: var(--snm-error) !important; }
+
+// ----- Stroked / outlined buttons -----
+.mat-mdc-outlined-button:not([disabled]) {
+  border-color: var(--snm-border-field) !important;
+  color: var(--snm-text-primary) !important;
+  border-radius: 8px !important;
+
+  .mdc-button__label { color: var(--snm-text-primary) !important; }
+
+  &:hover {
+    background: var(--snm-accent-hover) !important;
+    border-color: var(--snm-accent) !important;
+  }
+}
+
+.mat-mdc-outlined-button.mat-primary:not([disabled]) {
+  border-color: var(--snm-accent) !important;
+  color: var(--snm-accent-dark) !important;
+
+  .mdc-button__label,
+  mat-icon { color: var(--snm-accent-dark) !important; }
+
+  &:hover { background: var(--snm-accent-hover) !important; }
+}
+
+.mat-mdc-outlined-button.mat-warn:not([disabled]) {
+  border-color: var(--snm-error) !important;
+  color: var(--snm-error) !important;
+
+  .mdc-button__label,
+  mat-icon { color: var(--snm-error) !important; }
+
+  &:hover { background: rgba(198, 40, 40, 0.08) !important; }
+}
+
+.mat-mdc-outlined-button[disabled] {
+  border-color: var(--snm-border-divider) !important;
+  color: var(--snm-text-faint) !important;
+  .mdc-button__label,
+  mat-icon { color: var(--snm-text-faint) !important; }
+}
+
+// ----- Icon buttons -----
+.mat-mdc-icon-button:not([disabled]) {
+  color: var(--snm-text-secondary);
+
+  &:hover { background: var(--snm-accent-hover); }
+
+  // Coloured variants (when [color]="primary|warn|accent" is set).
+  &.mat-primary { color: var(--snm-accent-dark) !important; }
+  &.mat-warn { color: var(--snm-error) !important; }
+}
+.mat-mdc-icon-button[disabled] { color: var(--snm-text-faint) !important; }
+
+// ----- Flat / unelevated buttons -----
+// Treated like a softer raised primary — solid accent fill, white label.
+.mat-mdc-unelevated-button.mat-primary:not([disabled]) {
+  background: var(--snm-accent) !important;
+  color: var(--snm-text-on-primary) !important;
+  border-radius: 8px !important;
+  .mdc-button__label,
+  mat-icon { color: var(--snm-text-on-primary) !important; }
+  &:hover { background: var(--snm-accent-dark) !important; }
+}
+.mat-mdc-unelevated-button.mat-warn:not([disabled]) {
+  background: var(--snm-error) !important;
+  color: var(--snm-text-on-primary) !important;
+  border-radius: 8px !important;
+  .mdc-button__label,
+  mat-icon { color: var(--snm-text-on-primary) !important; }
+}
+
+// Disabled state for raised/unelevated buttons. Material's default fades
+// the button to a near-invisible translucent grey on dark glass, which
+// looked broken in the chatbot composer. A subtle accent-tinted fill +
+// muted label keeps the affordance visible while clearly conveying
+// "you can't click this yet".
+.mat-mdc-unelevated-button[disabled],
+.mat-mdc-raised-button[disabled] {
+  background: var(--snm-accent-subtle) !important;
+  color: var(--snm-text-muted) !important;
+  box-shadow: none !important;
+  border-radius: 8px !important;
+  opacity: 1 !important;
+
+  .mdc-button__label,
+  mat-icon { color: var(--snm-text-muted) !important; }
+}
+
+// ----- Plain text buttons outside dialog actions -----
+// The dialog-action rule already covers buttons inside [mat-dialog-actions].
+// This is a softer fallback for buttons placed elsewhere on the page.
+.mat-mdc-button:not(.mat-mdc-raised-button):not(.mat-mdc-outlined-button):not(.mat-mdc-icon-button):not(.mat-mdc-unelevated-button) {
+  color: var(--snm-text-secondary);
+  &.mat-primary { color: var(--snm-accent-dark) !important; }
+  &.mat-warn { color: var(--snm-error) !important; }
+  &:hover { background: var(--snm-accent-hover); }
+}
+
+// ----- Tabs -----
+.mat-mdc-tab-header {
+  border-bottom: 1px solid var(--snm-border-divider);
+}
+.mat-mdc-tab .mdc-tab__text-label { color: var(--snm-text-secondary) !important; }
+.mat-mdc-tab.mdc-tab--active .mdc-tab__text-label,
+.mat-mdc-tab.mdc-tab--active:hover .mdc-tab__text-label {
+  color: var(--snm-accent-dark) !important;
+}
+.mat-mdc-tab-indicator .mdc-tab-indicator__content--underline {
+  border-color: var(--snm-accent) !important;
+}
+// Disabled tab (e.g. tabs locked until prior step is complete)
+.mat-mdc-tab[aria-disabled="true"] .mdc-tab__text-label {
+  color: var(--snm-text-faint) !important;
+}
+
+// ----- Checkbox / radio / slide-toggle (light + dark) -----
+// The pre-existing rules only fired in dark mode; these apply to both
+// themes so accent colour stays consistent.
+.mat-mdc-checkbox.mat-mdc-checkbox-checked .mdc-checkbox__background,
+.mat-mdc-checkbox.mat-mdc-checkbox-indeterminate .mdc-checkbox__background {
+  background-color: var(--snm-accent) !important;
+  border-color: var(--snm-accent) !important;
+}
+.mat-mdc-checkbox:not(.mat-mdc-checkbox-disabled) .mdc-form-field > label {
+  color: var(--snm-text-primary);
+}
+
+.mat-mdc-radio-button.mat-mdc-radio-checked .mdc-radio__outer-circle {
+  border-color: var(--snm-accent) !important;
+}
+.mat-mdc-radio-button.mat-mdc-radio-checked .mdc-radio__inner-circle {
+  background-color: var(--snm-accent) !important;
+}
+
+.mat-mdc-slide-toggle.mat-mdc-slide-toggle-checked .mdc-switch__track {
+  background-color: var(--snm-accent) !important;
+}
+.mat-mdc-slide-toggle.mat-mdc-slide-toggle-checked .mdc-switch__handle::after {
+  background-color: var(--snm-accent-dark) !important;
+}
+
+// ----- Divider -----
+.mat-divider,
+.mat-mdc-divider { border-color: var(--snm-border-divider) !important; }
+
+// ----- Tooltip (global, not just dark) -----
+.mat-mdc-tooltip .mdc-tooltip__surface {
+  background: var(--snm-glass-bg-solid) !important;
+  color: var(--snm-text-primary) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 4px 16px var(--snm-glass-shadow) !important;
+}
+
+// ----- Snackbar (global) -----
+.mat-mdc-snack-bar-container .mdc-snackbar__surface {
+  background: var(--snm-glass-bg-solid) !important;
+  color: var(--snm-text-primary) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px var(--snm-glass-shadow-heavy) !important;
+}
+.mat-mdc-snack-bar-container .mdc-snackbar__label { color: var(--snm-text-primary) !important; }
+.mat-mdc-snack-bar-container .mat-mdc-button { color: var(--snm-accent-dark) !important; }
+
+// ----- Mat-menu (light + dark) -----
+// Specialized panels (.profile-menu-panel, .col-picker-menu, etc.) keep
+// their own overrides via higher specificity.
+.mat-mdc-menu-panel {
+  background: var(--snm-glass-bg-solid) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--snm-glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 24px var(--snm-glass-shadow) !important;
+}
+.mat-mdc-menu-item {
+  color: var(--snm-text-primary) !important;
+  &:hover:not([disabled]) { background: var(--snm-accent-hover) !important; }
+  mat-icon { color: var(--snm-accent-dark) !important; }
+}
+
+// ----- Tables -----
+// Cell vertical alignment is inconsistent across grids; centring here
+// removes the random "looks slightly off" feel without affecting any
+// per-row layout.
+.mat-mdc-cell,
+.mat-mdc-header-cell,
+.mat-mdc-footer-cell { vertical-align: middle; }
+
+// Selected row state — used by selection-enabled lists.
+.mat-mdc-row.mat-row-selected,
+.mat-mdc-row[aria-selected="true"] {
+  background: var(--snm-accent-active) !important;
+}
+// (Zebra-striping intentionally omitted — sticky columns, editing-row
+//  highlights, and per-component hover rules vary across grids and a
+//  global stripe would fight them. Add per-feature if needed.)
+
+// ----- Pagination polish -----
+// Most rules already exist; refine the per-page select trigger so its
+// label colour matches the rest of the toolbar text.
+.mat-mdc-paginator {
+  .mat-mdc-form-field { color: var(--snm-text-secondary) !important; }
+  .mat-mdc-select-arrow { color: var(--snm-text-secondary) !important; }
+  .mat-mdc-paginator-page-size-label,
+  .mat-mdc-paginator-range-label { color: var(--snm-text-secondary) !important; }
+  .mat-mdc-form-field-infix { min-height: 32px !important; }
+}
+
+// ----- Dialog body density -----
+// Many dialogs cluster inputs tight to the title; breathing room makes
+// labels (which float above the field) safe from overlap on every dialog.
+// Width/height are intentionally NOT set here.
+.mat-mdc-dialog-content { padding-top: 12px !important; }
+
+
+// ===== Print: hide everything except document content =====
+@media print {
+  // Hide sidebar, toolbar, overlay backdrop, and animated blobs
+  mat-sidenav,
+  .app-sidenav,
+  mat-toolbar,
+  .app-toolbar,
+  .mat-drawer-backdrop,
+  .cdk-overlay-container,
+  .snm-blob-bg {
+    display: none !important;
+  }
+
+  // CRITICAL: Every wrapper from <html> down to the print component
+  // must allow overflow so the browser can paginate content across pages.
+  // Without this, content stays in a single non-breaking scroll container.
+  html, body,
+  app-root,
+  .app-container,
+  mat-sidenav-container, .mat-drawer-container,
+  mat-sidenav-content, .mat-drawer-content, .mat-sidenav-content,
+  .mat-mdc-sidenav-content {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    display: block !important;
+    position: static !important;
+    margin-left: 0 !important;
+    transform: none !important;
+  }
+
+  // Reset page background
+  body, html {
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  // Hide any element with .no-print
+  .no-print {
+    display: none !important;
+  }
+}

@@ -1,0 +1,217 @@
+<div class="settings-page">
+  <header class="page-header">
+    <div>
+      <h1>
+        <mat-icon class="title-icon">settings</mat-icon>
+        KPI Studio · Settings
+      </h1>
+      <p class="hint">
+        Manage the LLM provider, API key, and agent caps. Stored values
+        override the matching <code>KPI_*</code> env vars; leave a field
+        blank to fall back to env / default.
+      </p>
+    </div>
+  </header>
+
+  <mat-progress-bar *ngIf="loading() || saving()" mode="indeterminate"></mat-progress-bar>
+
+  <app-kpi-error-banner [error]="loadError()"
+                         (retry)="load()"
+                         (dismiss)="loadError.set(null)" />
+
+  <ng-container *ngIf="settings() as s">
+    <!-- Effective-state summary chips so the user can see what's actually running. -->
+    <section class="effective">
+      <div class="eff-header">
+        <strong>Currently in effect</strong>
+        <mat-chip *ngIf="isUsingEnvFallback()" class="eff-chip env" disabled>
+          using env fallback
+        </mat-chip>
+        <mat-chip *ngIf="!isUsingEnvFallback() && effectiveHasKey()" class="eff-chip db" disabled>
+          using DB settings
+        </mat-chip>
+        <mat-chip *ngIf="!effectiveHasKey()" class="eff-chip none" disabled>
+          no provider configured
+        </mat-chip>
+      </div>
+      <ul class="eff-list">
+        <li><span>Provider:</span> {{ s.effective_provider || '— none —' }}</li>
+        <li><span>Model:</span> {{ s.effective_model || '— none —' }}</li>
+        <li><span>API key:</span> {{ effectiveHasKey() ? '✓ set' : '✗ missing' }}</li>
+        <li><span>Token budget:</span> {{ s.effective_token_budget }}</li>
+        <li><span>Max iterations:</span> {{ s.effective_max_iterations }}</li>
+        <li><span>Max tokens / call:</span> {{ s.effective_max_tokens_per_call }}</li>
+      </ul>
+    </section>
+
+    <!-- Provider config -->
+    <section class="card">
+      <h2>Provider</h2>
+
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>Provider</mat-label>
+        <mat-select [value]="providerField()" (valueChange)="providerField.set($event)">
+          <mat-option [value]="''">— Use env / disabled —</mat-option>
+          <mat-option value="openai">OpenAI</mat-option>
+          <mat-option value="cerebras">Cerebras (OpenAI-compat)</mat-option>
+          <mat-option value="ollama_cloud">Ollama Cloud (OpenAI-compat)</mat-option>
+        </mat-select>
+        <mat-hint>
+          Selecting a value writes a row to the DB. Empty falls back to
+          the <code>KPI_LLM_PROVIDER</code> env var.
+        </mat-hint>
+      </mat-form-field>
+
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>API key</mat-label>
+        <input matInput
+               [type]="revealKey() ? 'text' : 'password'"
+               [ngModel]="apiKeyField()"
+               (ngModelChange)="onApiKeyInput($event)"
+               autocomplete="off"
+               [placeholder]="s.has_api_key ? 'Stored key (hidden — type to overwrite)' : 'sk-…'">
+        <button mat-icon-button matSuffix
+                type="button"
+                (click)="toggleReveal()"
+                [matTooltip]="revealKey() ? 'Hide' : 'Reveal what you typed'">
+          <mat-icon>{{ revealKey() ? 'visibility_off' : 'visibility' }}</mat-icon>
+        </button>
+        <mat-hint>
+          <ng-container *ngIf="s.has_api_key && !apiKeyTouched()">
+            ✓ Key is set. Type a new value to overwrite, or
+            <a (click)="clearApiKey()" class="clear-link">clear it</a>.
+          </ng-container>
+          <ng-container *ngIf="!s.has_api_key && !apiKeyTouched()">
+            No key stored. Falls back to the env var.
+          </ng-container>
+          <ng-container *ngIf="apiKeyTouched() && apiKeyField()">
+            New key will be saved on next "Save".
+          </ng-container>
+          <ng-container *ngIf="apiKeyTouched() && !apiKeyField()">
+            ⚠ Saving will <strong>clear</strong> the stored key.
+          </ng-container>
+        </mat-hint>
+      </mat-form-field>
+
+      <div class="row">
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Model</mat-label>
+          <input matInput
+                 [ngModel]="modelField()"
+                 (ngModelChange)="modelField.set($event)"
+                 placeholder="gpt-4o-mini">
+          <mat-hint>e.g. gpt-4o-mini, llama-3.3-70b — depends on provider.</mat-hint>
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Base URL (optional)</mat-label>
+          <input matInput
+                 [ngModel]="baseUrlField()"
+                 (ngModelChange)="baseUrlField.set($event)"
+                 placeholder="https://api.openai.com/v1">
+        </mat-form-field>
+      </div>
+
+      <button mat-stroked-button color="primary"
+              (click)="test()"
+              [disabled]="testing() || !effectiveHasKey()">
+        <mat-icon>cell_tower</mat-icon>
+        {{ testing() ? 'Testing…' : 'Test connection' }}
+      </button>
+
+      <div *ngIf="testResult() as t"
+           class="test-result"
+           [class.ok]="t.ok"
+           [class.fail]="!t.ok">
+        <mat-icon>{{ t.ok ? 'check_circle' : 'error_outline' }}</mat-icon>
+        <div>
+          <strong>{{ t.ok ? 'Success' : 'Failed' }}</strong>
+          <p>{{ t.message }}</p>
+          <p *ngIf="t.ok" class="meta">
+            {{ t.provider }} · {{ t.model }} · {{ t.latency_ms }}ms
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Agent caps -->
+    <section class="card">
+      <h2>Agent caps</h2>
+      <p class="card-hint">
+        Per-run limits. Leaving any field blank uses the matching
+        <code>KPI_NL_*</code> env var, then the compile-time default.
+      </p>
+
+      <div class="row">
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Token budget (per agent run)</mat-label>
+          <input matInput type="number" min="100" max="10000000"
+                 [ngModel]="tokenBudgetField()"
+                 (ngModelChange)="tokenBudgetField.set($event)">
+          <mat-hint>Default: 50,000. Aborts cleanly when exceeded.</mat-hint>
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Max iterations</mat-label>
+          <input matInput type="number" min="1" max="50"
+                 [ngModel]="maxIterationsField()"
+                 (ngModelChange)="maxIterationsField.set($event)">
+          <mat-hint>Default: 8. Tool-call rounds before giving up.</mat-hint>
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="grow">
+          <mat-label>Max tokens / call</mat-label>
+          <input matInput type="number" min="100" max="200000"
+                 [ngModel]="maxTokensPerCallField()"
+                 (ngModelChange)="maxTokensPerCallField.set($event)">
+          <mat-hint>Default: 4,000. Per-call output cap.</mat-hint>
+        </mat-form-field>
+      </div>
+    </section>
+
+    <!-- System Knowledge Hub — admin-curated business context appended
+         to the chatbot agent's system prompt on every turn. -->
+    <section class="card">
+      <h2>
+        <mat-icon class="title-icon">menu_book</mat-icon>
+        System Knowledge Hub
+      </h2>
+      <p class="card-hint">
+        Plain-text business context the agent reads <em>before</em>
+        exploring the schema. Use it to teach the LLM what your domain
+        terms mean — what a "parent code" is, who an "owner" or
+        "reportTo" is, how location mapping cascades, the lifecycle of an
+        Enquiry and a Quotation (Draft → Approved → Matured → Viability
+        → Annexure), what state a record can move to next, etc.
+        <br>
+        The agent is read-only by design: SQL safety blocks every
+        DELETE / UPDATE / INSERT / EXEC, so you can paste freely without
+        worrying about the model "doing" anything.
+      </p>
+
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>Domain knowledge (markdown-friendly)</mat-label>
+        <textarea matInput
+                  rows="14"
+                  maxlength="32000"
+                  [ngModel]="domainKnowledgeField()"
+                  (ngModelChange)="onDomainKnowledgeInput($event)"
+                  placeholder="e.g.&#10;# Entities&#10;- Customer → Enquiry → Quotation → Quotation Detail (line items)&#10;# Ownership&#10;- Each Enquiry/Quotation has an ownerUserId; the user's reportTo chain controls visibility (F5 hierarchy filter)&#10;# Quotation lifecycle&#10;- Draft → Approved → Matured (PO received) → ViabilityGenerated → ViabilityApproved → AnnexureGenerated → AnnexureApproved&#10;- 'Reject' and 'Revised' are terminal side-states&#10;# Location mapping&#10;- Each user maps to states/districts; F6 filters records by site state/dist&#10;..."></textarea>
+        <mat-hint align="end">
+          {{ domainKnowledgeField().length }} / 32000
+          <span *ngIf="domainKnowledgeTouched()"> · unsaved</span>
+        </mat-hint>
+      </mat-form-field>
+    </section>
+
+    <footer class="actions">
+      <button mat-flat-button color="primary"
+              (click)="save()"
+              [disabled]="saving()">
+        <mat-icon>save</mat-icon>
+        Save changes
+      </button>
+      <button mat-stroked-button (click)="load()" [disabled]="loading() || saving()">
+        <mat-icon>refresh</mat-icon>
+        Reset
+      </button>
+    </footer>
+  </ng-container>
+</div>

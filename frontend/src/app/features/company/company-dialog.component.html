@@ -1,0 +1,108 @@
+<h2 mat-dialog-title>{{ isEdit ? 'Edit' : 'Add' }} Company</h2>
+
+<mat-dialog-content>
+  <form [formGroup]="form">
+    <mat-tab-group>
+      <mat-tab label="Basic Info">
+        <div class="form-grid">
+          <mat-form-field appearance="outline">
+            <mat-label>Company Name *</mat-label>
+            <input matInput formControlName="companyName" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Company Code</mat-label>
+            <input matInput formControlName="companyCode" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Address</mat-label>
+            <input matInput formControlName="address" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>City</mat-label>
+            <input matInput formControlName="city" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Country</mat-label>
+            <mat-select formControlName="country" (selectionChange)="onCountryChange($event.value)">
+              <mat-option [value]="''">-- Select Country --</mat-option>
+              <mat-option *ngFor="let c of countries" [value]="c.countryname">{{ c.countryname }}</mat-option>
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>State</mat-label>
+            <mat-select formControlName="state">
+              <mat-option [value]="''">-- Select State --</mat-option>
+              <mat-option *ngFor="let s of states" [value]="s.StateName">{{ s.StateName }}</mat-option>
+            </mat-select>
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>PIN Code</mat-label>
+            <input matInput formControlName="pinCode" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Phone</mat-label>
+            <input matInput formControlName="phone" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Email</mat-label>
+            <input matInput formControlName="email" type="email" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Website</mat-label>
+            <input matInput formControlName="website" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>GSTN</mat-label>
+            <input matInput formControlName="GSTN" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>PAN</mat-label>
+            <input matInput formControlName="PAN" />
+          </mat-form-field>
+        </div>
+      </mat-tab>
+
+      <mat-tab label="Email Configuration (Optional)">
+        <div class="form-grid">
+          <mat-form-field appearance="outline">
+            <mat-label>Mail From (Email)</mat-label>
+            <input matInput formControlName="MailFrom" type="email" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Mail Password</mat-label>
+            <input matInput formControlName="MailPassword" type="password" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>SMTP Host</mat-label>
+            <input matInput formControlName="SMTP" />
+          </mat-form-field>
+
+          <mat-form-field appearance="outline">
+            <mat-label>Port No</mat-label>
+            <input matInput formControlName="PortNo" />
+          </mat-form-field>
+        </div>
+      </mat-tab>
+    </mat-tab-group>
+  </form>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button mat-dialog-close>Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="!form.valid">
+    {{ isEdit ? 'Update' : 'Create' }}
+  </button>
+</mat-dialog-actions>

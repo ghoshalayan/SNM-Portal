@@ -1,0 +1,241 @@
+<div class="page-header">
+  <div class="page-header-left">
+    <button mat-icon-button (click)="router.navigate(['/roles'])" class="back-btn">
+      <mat-icon>arrow_back</mat-icon>
+    </button>
+    <h2>Role-Menu Permissions — <span style="color: var(--snm-accent);">{{ roleName }}</span></h2>
+  </div>
+  <button mat-stroked-button color="accent"
+    [routerLink]="['/roles', roleId, 'permissions-v2']"
+    matTooltip="Try the redesigned permissions UI — same data, cleaner flow"
+    style="margin-right: 8px;">
+    <mat-icon>auto_awesome</mat-icon> Try new UI
+  </button>
+  <button mat-raised-button color="primary" (click)="save()" [disabled]="saving || loading">
+    <mat-icon>save</mat-icon> Save Permissions
+  </button>
+</div>
+
+<!-- Role Settings -->
+<mat-card style="margin-bottom: 16px;">
+  <mat-card-header>
+    <mat-card-title style="font-size: 16px;">Role Settings</mat-card-title>
+  </mat-card-header>
+  <mat-card-content>
+
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start;">
+
+      <!-- Left column -->
+      <div style="flex: 1; min-width: 320px;">
+        <!-- Role Level -->
+        <p style="font-weight: 500; margin: 8px 0 4px;">Role Hierarchy Level</p>
+        <p style="font-size: 13px; color: rgba(0,0,0,0.6); margin: 0 0 8px;">
+          Higher number = more authority. SuperAdmin should be highest (e.g. 100).
+        </p>
+        <mat-form-field appearance="outline" style="width: 200px;">
+          <mat-label>Level</mat-label>
+          <input matInput type="number" [(ngModel)]="roleLevel" min="0" />
+        </mat-form-field>
+
+        <mat-divider style="margin: 12px 0;"></mat-divider>
+
+        <!-- Number Generation Mode -->
+        <p style="font-weight: 500; margin: 0 0 4px;">Enquiry / Quotation Number Generation &amp; Ownership</p>
+        <p style="font-size: 13px; color: rgba(0,0,0,0.6); margin: 0 0 8px;">
+          Controls whose user code appears in the number AND who becomes the record owner.
+        </p>
+        <mat-radio-group [(ngModel)]="numGenMode" style="display: flex; flex-direction: column; gap: 6px;">
+          <mat-radio-button value="own_code">
+            <strong>Use Own Code</strong> — Owner = self
+          </mat-radio-button>
+          <mat-radio-button value="parent_code">
+            <strong>Use Parent Code</strong> — Owner = reporting manager (company-scoped)
+          </mat-radio-button>
+          <mat-radio-button value="select_code">
+            <strong>Select User Code</strong> — Owner = selected from dropdown during creation
+          </mat-radio-button>
+        </mat-radio-group>
+      </div>
+
+      <!-- Right column -->
+      <div style="flex: 1; min-width: 320px;">
+        <!-- Access Controls -->
+        <p style="font-weight: 500; margin: 8px 0 4px;">Access Controls</p>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <mat-checkbox [(ngModel)]="isCompanyAdmin" color="primary">
+            <strong>Company Admin</strong> — Full access within the company (bypasses hierarchy/location)
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="peerAccess" color="primary">
+            <strong>Peer Access</strong> — View records of users under the same manager
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="peerSubtree" [disabled]="!peerAccess" color="primary">
+            <strong>Peer Subtree</strong> — Also include peers' subordinates (requires Peer Access)
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="locationScopeRequired" color="primary">
+            <strong>Location Scope Required</strong> — Restrict data access by assigned locations
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="enforceChildLocationSubset" color="primary">
+            <strong>KRO-style Location Subset</strong> — User's locations must be subset of reporting manager's
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="canApproveTransfers" color="primary">
+            <strong>Can Approve Transfers</strong> — Approve/reject ownership transfer requests
+          </mat-checkbox>
+          <mat-checkbox [(ngModel)]="includeSubtreeOnUpward" color="primary">
+            <strong>Include Subtree on Upward</strong> — When seeing ancestors, also see their full subtree
+          </mat-checkbox>
+        </div>
+
+        <mat-divider style="margin: 12px 0;"></mat-divider>
+
+        <!-- Hierarchy Visibility Levels -->
+        <p style="font-weight: 500; margin: 0 0 4px;">Hierarchy Visibility Levels</p>
+        <p style="font-size: 13px; color: rgba(0,0,0,0.6); margin: 0 0 8px;">
+          Control how many levels of children/parents are visible. Use <code>-1</code> for unlimited, <code>0</code> for none.
+        </p>
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <mat-form-field appearance="outline" style="width: 180px;">
+            <mat-label>Downward Levels</mat-label>
+            <input matInput type="number" [(ngModel)]="downwardLevels" min="-1" />
+            <mat-hint>Children visible</mat-hint>
+          </mat-form-field>
+          <mat-form-field appearance="outline" style="width: 180px;">
+            <mat-label>Upward Levels</mat-label>
+            <input matInput type="number" [(ngModel)]="upwardLevels" min="-1" />
+            <mat-hint>Parents visible</mat-hint>
+          </mat-form-field>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top: 16px; border-top: 1px solid rgba(0,0,0,0.08); padding-top: 12px;">
+      <button mat-raised-button color="accent" (click)="saveRoleSettings()" [disabled]="numGenSaving">
+        <mat-icon>save</mat-icon> {{ numGenSaving ? 'Saving...' : 'Save Settings' }}
+      </button>
+    </div>
+  </mat-card-content>
+</mat-card>
+
+<!-- Menu Permissions -->
+<mat-card>
+  <mat-card-content>
+    @if (loading) {
+      <app-skeleton-loader type="table" [rows]="8" [columns]="5"></app-skeleton-loader>
+    } @else if (menuTree.length === 0) {
+      <p class="no-data">No menu permissions found for this role.</p>
+    } @else {
+      <div class="tree-header">
+        <span class="menu-name-col">Menu</span>
+        <span class="perm-col">Add</span>
+        <span class="perm-col">Read</span>
+        <span class="perm-col">Edit</span>
+        <span class="perm-col">Delete</span>
+        <span class="perm-col">Edit No.</span>
+        <span class="perm-col">Approve</span>
+        <span class="perm-col">Revise</span>
+        <span class="perm-col">Transfer</span>
+        <span class="perm-col">Gen Under</span>
+      </div>
+
+      <div class="tree-body">
+        @for (node of menuTree; track node.menuId) {
+          <!-- Parent node -->
+          <div class="tree-node parent-node">
+            <div class="node-content">
+              <button mat-icon-button class="toggle-btn" (click)="toggle(node.menuId)"
+                [class.no-children]="!node.children?.length">
+                @if (node.children?.length) {
+                  <mat-icon>{{ isExpanded(node.menuId) ? 'expand_more' : 'chevron_right' }}</mat-icon>
+                }
+              </button>
+              <span class="menu-name-col parent-label">{{ node.menuName }}</span>
+              <mat-checkbox class="perm-col" [checked]="node.canAdd"
+                (change)="toggleAll(node, 'canAdd')"></mat-checkbox>
+              <mat-checkbox class="perm-col" [checked]="node.canRead"
+                (change)="toggleAll(node, 'canRead')"></mat-checkbox>
+              <mat-checkbox class="perm-col" [checked]="node.canEdit"
+                (change)="toggleAll(node, 'canEdit')"></mat-checkbox>
+              <mat-checkbox class="perm-col" [checked]="node.canDelete"
+                (change)="toggleAll(node, 'canDelete')"></mat-checkbox>
+              <mat-checkbox class="perm-col" [checked]="node.canEditNumber"
+                (change)="toggleAll(node, 'canEditNumber')"></mat-checkbox>
+              @for (extra of ['canApprove', 'canRevise', 'canTransferOwnership', 'canGenerateUnderOthers']; track extra) {
+                @if (extraPerms(node.menuName).includes(extra)) {
+                  <mat-checkbox class="perm-col" [checked]="$any(node)[extra]"
+                    (change)="toggleAll(node, $any(extra))"></mat-checkbox>
+                } @else {
+                  <span class="perm-col"></span>
+                }
+              }
+            </div>
+          </div>
+
+          <!-- Children (level 1) -->
+          @if (isExpanded(node.menuId) && node.children?.length) {
+            @for (child of node.children; track child.menuId) {
+              <div class="tree-node child-node">
+                <div class="node-content" style="padding-left: 40px;">
+                  <button mat-icon-button class="toggle-btn" (click)="toggle(child.menuId)"
+                    [class.no-children]="!child.children?.length">
+                    @if (child.children?.length) {
+                      <mat-icon>{{ isExpanded(child.menuId) ? 'expand_more' : 'chevron_right' }}</mat-icon>
+                    }
+                  </button>
+                  <span class="menu-name-col child-label">{{ child.menuName }}</span>
+                  <mat-checkbox class="perm-col" [checked]="child.canAdd"
+                    (change)="toggleAll(child, 'canAdd')"></mat-checkbox>
+                  <mat-checkbox class="perm-col" [checked]="child.canRead"
+                    (change)="toggleAll(child, 'canRead')"></mat-checkbox>
+                  <mat-checkbox class="perm-col" [checked]="child.canEdit"
+                    (change)="toggleAll(child, 'canEdit')"></mat-checkbox>
+                  <mat-checkbox class="perm-col" [checked]="child.canDelete"
+                    (change)="toggleAll(child, 'canDelete')"></mat-checkbox>
+                  <mat-checkbox class="perm-col" [checked]="child.canEditNumber"
+                    (change)="toggleAll(child, 'canEditNumber')"></mat-checkbox>
+                  @for (extra of ['canApprove', 'canRevise', 'canTransferOwnership', 'canGenerateUnderOthers']; track extra) {
+                    @if (extraPerms(child.menuName).includes(extra)) {
+                      <mat-checkbox class="perm-col" [checked]="$any(child)[extra]"
+                        (change)="toggleAll(child, $any(extra))"></mat-checkbox>
+                    } @else {
+                      <span class="perm-col"></span>
+                    }
+                  }
+                </div>
+              </div>
+
+              <!-- Grandchildren (level 2) -->
+              @if (isExpanded(child.menuId) && child.children?.length) {
+                @for (sub of child.children; track sub.menuId) {
+                  <div class="tree-node sub-node">
+                    <div class="node-content" style="padding-left: 80px;">
+                      <span class="spacer"></span>
+                      <span class="menu-name-col sub-label">{{ sub.menuName }}</span>
+                      <mat-checkbox class="perm-col" [checked]="sub.canAdd"
+                        (change)="togglePermission(sub, 'canAdd')"></mat-checkbox>
+                      <mat-checkbox class="perm-col" [checked]="sub.canRead"
+                        (change)="togglePermission(sub, 'canRead')"></mat-checkbox>
+                      <mat-checkbox class="perm-col" [checked]="sub.canEdit"
+                        (change)="togglePermission(sub, 'canEdit')"></mat-checkbox>
+                      <mat-checkbox class="perm-col" [checked]="sub.canDelete"
+                        (change)="togglePermission(sub, 'canDelete')"></mat-checkbox>
+                      <mat-checkbox class="perm-col" [checked]="sub.canEditNumber"
+                        (change)="togglePermission(sub, 'canEditNumber')"></mat-checkbox>
+                      @for (extra of ['canApprove', 'canRevise', 'canTransferOwnership', 'canGenerateUnderOthers']; track extra) {
+                        @if (extraPerms(sub.menuName).includes(extra)) {
+                          <mat-checkbox class="perm-col" [checked]="$any(sub)[extra]"
+                            (change)="togglePermission(sub, $any(extra))"></mat-checkbox>
+                        } @else {
+                          <span class="perm-col"></span>
+                        }
+                      }
+                    </div>
+                  </div>
+                }
+              }
+            }
+          }
+        }
+      </div>
+    }
+  </mat-card-content>
+</mat-card>

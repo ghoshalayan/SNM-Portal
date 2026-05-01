@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>RBAC v2 Test Report</title>
+<style>
+  body { font-family: 'Segoe UI', sans-serif; margin: 20px; background: #fafafa; }
+  h1 { color: #1565c0; }
+  .summary { display: flex; gap: 16px; margin: 16px 0; flex-wrap: wrap; }
+  .summary-card {
+    padding: 16px 24px; border-radius: 8px; background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.1); min-width: 120px; text-align: center;
+  }
+  .summary-card .num { font-size: 28px; font-weight: 700; }
+  .summary-card .label { font-size: 12px; color: #666; text-transform: uppercase; }
+  .pass { color: #4caf50; } .fail { color: #f44336; }
+  .error { color: #ff9800; } .skip { color: #9e9e9e; }
+  table { width: 100%; border-collapse: collapse; background: #fff;
+           box-shadow: 0 1px 4px rgba(0,0,0,.1); border-radius: 8px; overflow: hidden; }
+  th { background: #1565c0; color: #fff; padding: 10px 12px; text-align: left; font-size: 12px; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  tr:hover td { background: #f5f8ff; }
+  .module-row td { background: #e3f2fd; font-size: 14px; padding: 10px 12px; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+  .error-text { color: #f44336; font-size: 11px; display: block; }
+  .meta { color: #888; font-size: 12px; margin-top: 8px; }
+</style></head><body>
+<h1>RBAC v2 — Test Report</h1>
+<p class="meta">Generated: 2026-04-15 11:47:15 | Duration: 6.8s</p>
+
+<div class="summary">
+  <div class="summary-card"><div class="num">34</div><div class="label">Total</div></div>
+  <div class="summary-card"><div class="num pass">29</div><div class="label">Passed</div></div>
+  <div class="summary-card"><div class="num fail">1</div><div class="label">Failed</div></div>
+  <div class="summary-card"><div class="num error">4</div><div class="label">Errors</div></div>
+  <div class="summary-card"><div class="num skip">0</div><div class="label">Skipped</div></div>
+  <div class="summary-card"><div class="num" style="color:#1565c0">85.3%</div><div class="label">Pass Rate</div></div>
+</div>
+
+<table>
+  <thead><tr>
+    <th>ID</th><th>Test Case</th><th>Actor</th><th>Status</th>
+    <th>Expected</th><th>Actual</th><th>Time</th>
+  </tr></thead>
+  <tbody><tr class="module-row"><td colspan="7"><strong>Customer</strong></td></tr>
+
+            <tr>
+                <td><code>C01</code></td>
+                <td>List customers (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200 + items</td>
+                <td>HTTP 200 (5 items) </td>
+                <td>35.0ms</td>
+            </tr>
+            <tr>
+                <td><code>C03</code></td>
+                <td>Create customer (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201 Created</td>
+                <td>HTTP 201 (id=7) </td>
+                <td>23.3ms</td>
+            </tr>
+            <tr>
+                <td><code>C05</code></td>
+                <td>Update customer (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>22.0ms</td>
+            </tr>
+            <tr>
+                <td><code>C07</code></td>
+                <td>SuperAdmin lists customers</td>
+                <td><code>superadmin</code></td>
+                <td style="color:#ff9800;font-weight:700">ERROR</td>
+                <td>200</td>
+                <td> <span class="error-text">Illegal header value b'Bearer '</span></td>
+                <td>0.0ms</td>
+            </tr>
+            <tr>
+                <td><code>C08</code></td>
+                <td>CompanyAdmin lists customers</td>
+                <td><code>companyadmin</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>2059.6ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Contacts</strong></td></tr>
+
+            <tr>
+                <td><code>CC01</code></td>
+                <td>List contacts — BDM-A (location filtered)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>26.2ms</td>
+            </tr>
+            <tr>
+                <td><code>CC03</code></td>
+                <td>Create contact in allotted location</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201</td>
+                <td>HTTP 201 (loc=Andhra Pradesh/all) </td>
+                <td>28.7ms</td>
+            </tr>
+            <tr>
+                <td><code>CC10</code></td>
+                <td>SuperAdmin bypasses location</td>
+                <td><code>superadmin</code></td>
+                <td style="color:#ff9800;font-weight:700">ERROR</td>
+                <td>200</td>
+                <td> <span class="error-text">Illegal header value b'Bearer '</span></td>
+                <td>1.0ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Sites</strong></td></tr>
+
+            <tr>
+                <td><code>CS01</code></td>
+                <td>List sites — BDM-A (location filtered)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>2054.7ms</td>
+            </tr>
+            <tr>
+                <td><code>CS02</code></td>
+                <td>Create site in allotted location</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201</td>
+                <td>HTTP 201 (loc=Andhra Pradesh/all) </td>
+                <td>27.8ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Enquiry</strong></td></tr>
+
+            <tr>
+                <td><code>E01</code></td>
+                <td>List enquiries — BDM-A (own + subordinates)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 (2 total) </td>
+                <td>29.0ms</td>
+            </tr>
+            <tr>
+                <td><code>E03</code></td>
+                <td>List enquiries — KRO-1 (upward=0, own only)</td>
+                <td><code>kro_1</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>23.1ms</td>
+            </tr>
+            <tr>
+                <td><code>E07</code></td>
+                <td>List enquiries — Director sees all subordinates</td>
+                <td><code>director</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>24.7ms</td>
+            </tr>
+            <tr>
+                <td><code>E09</code></td>
+                <td>Create enquiry — auto-generate number (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201</td>
+                <td>HTTP 201 (enqNo=ENQ-BDMA-2526-0005) </td>
+                <td>43.3ms</td>
+            </tr>
+            <tr>
+                <td><code>E13</code></td>
+                <td>Update own enquiry (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>29.0ms</td>
+            </tr>
+            <tr>
+                <td><code>E15</code></td>
+                <td>Update peer's enquiry (BDM-B, no peerAccess)</td>
+                <td><code>bdm_b</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>403/404</td>
+                <td>HTTP 404 </td>
+                <td>14.8ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Enq Sub</strong></td></tr>
+
+            <tr>
+                <td><code>ES01</code></td>
+                <td>Get details — parent visible (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>17.3ms</td>
+            </tr>
+            <tr>
+                <td><code>ES02</code></td>
+                <td>Get details — parent NOT visible (BDM-B)</td>
+                <td><code>bdm_b</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>403/404</td>
+                <td>HTTP 404 </td>
+                <td>19.8ms</td>
+            </tr>
+            <tr>
+                <td><code>ES07</code></td>
+                <td>Get followups — parent visible (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>54.1ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Enq Handover</strong></td></tr>
+
+            <tr>
+                <td><code>EH02</code></td>
+                <td>BDM tries handover (no CanTransferOwnership)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>403</td>
+                <td>HTTP 403 </td>
+                <td>10.5ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Quotation</strong></td></tr>
+
+            <tr>
+                <td><code>Q01</code></td>
+                <td>List quotations — BDM-A</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>37.3ms</td>
+            </tr>
+            <tr>
+                <td><code>Q02</code></td>
+                <td>Create quotation — own code (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201</td>
+                <td>HTTP 201 (quotNo=QUOT-BDMA-2526-0004) </td>
+                <td>37.8ms</td>
+            </tr>
+            <tr>
+                <td><code>Q05</code></td>
+                <td>Director code-picker — direct reports only</td>
+                <td><code>director</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 (3 users: ['BDM A Test', 'BDM B Test', 'BDM C Test']) </td>
+                <td>11.9ms</td>
+            </tr>
+            <tr>
+                <td><code>Q06</code></td>
+                <td>Update own quotation (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>31.8ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Quot Sub</strong></td></tr>
+
+            <tr>
+                <td><code>QS01</code></td>
+                <td>Get details — parent visible (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>18.5ms</td>
+            </tr>
+            <tr>
+                <td><code>QS02</code></td>
+                <td>Get details — parent NOT visible (BDM-B)</td>
+                <td><code>bdm_b</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>403/404</td>
+                <td>HTTP 404 </td>
+                <td>15.4ms</td>
+            </tr>
+            <tr>
+                <td><code>QS06</code></td>
+                <td>Get terms — parent visible (BDM-A)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>17.7ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Quot Approve</strong></td></tr>
+
+            <tr>
+                <td><code>QA01</code></td>
+                <td>Approve quotation (BDM-A, CanApprove=T)</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#f44336;font-weight:700">FAIL</td>
+                <td>200 Approved</td>
+                <td>HTTP 403 — Permission denied: CanApprove on Quotations </td>
+                <td>8.7ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Quot Handover</strong></td></tr>
+
+            <tr>
+                <td><code>QH04</code></td>
+                <td>BDM handover — no CanTransferOwnership</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>403</td>
+                <td>HTTP 403 </td>
+                <td>9.5ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>KRO Loc</strong></td></tr>
+
+            <tr>
+                <td><code>KL01</code></td>
+                <td>KRO-1 has inherited locations from BDM-A</td>
+                <td><code>kro_1</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200 + locations</td>
+                <td>HTTP 200 (0 states visible) </td>
+                <td>6.3ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Cross</strong></td></tr>
+
+            <tr>
+                <td><code>X06</code></td>
+                <td>NULL siteId — bypass location filter</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>201</td>
+                <td>HTTP 201 </td>
+                <td>19.3ms</td>
+            </tr>
+            <tr>
+                <td><code>X07</code></td>
+                <td>SuperAdmin bypasses all filters</td>
+                <td><code>superadmin</code></td>
+                <td style="color:#ff9800;font-weight:700">ERROR</td>
+                <td>200</td>
+                <td> <span class="error-text">Illegal header value b'Bearer '</span></td>
+                <td>0.9ms</td>
+            </tr>
+            <tr>
+                <td><code>X09</code></td>
+                <td>Health check works</td>
+                <td><code>bdm_a</code></td>
+                <td style="color:#4caf50;font-weight:700">PASS</td>
+                <td>200</td>
+                <td>HTTP 200 </td>
+                <td>2028.9ms</td>
+            </tr><tr class="module-row"><td colspan="7"><strong>Cleanup</strong></td></tr>
+
+            <tr>
+                <td><code>CLN</code></td>
+                <td>Delete test data</td>
+                <td><code>superadmin</code></td>
+                <td style="color:#ff9800;font-weight:700">ERROR</td>
+                <td>Cleaned</td>
+                <td> <span class="error-text">Illegal header value b'Bearer '</span></td>
+                <td>1.8ms</td>
+            </tr></tbody>
+</table>
+</body></html>

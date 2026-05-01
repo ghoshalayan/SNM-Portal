@@ -1,0 +1,64 @@
+<mat-sidenav-container class="app-container">
+  <mat-sidenav
+    #sidenav
+    mode="side"
+    [opened]="sidenavOpened"
+    class="app-sidenav"
+  >
+    <div class="sidenav-header">
+      <h3>S&amp;M Portal</h3>
+    </div>
+    <app-dynamic-menu></app-dynamic-menu>
+  </mat-sidenav>
+
+  <mat-sidenav-content>
+    <mat-toolbar color="primary" class="app-toolbar">
+      @if (authService.currentUser$ | async; as user) {
+        <button mat-icon-button (click)="toggleSidenav()">
+          <mat-icon>menu</mat-icon>
+        </button>
+        <span class="toolbar-spacer"></span>
+        <app-company-switcher></app-company-switcher>
+
+        <!-- Theme toggle -->
+        <button mat-icon-button class="theme-toggle-btn" (click)="themeService.toggle()"
+          [matTooltip]="themeService.isDark() ? 'Switch to light mode' : 'Switch to dark mode'">
+          <mat-icon>{{ themeService.isDark() ? 'light_mode' : 'dark_mode' }}</mat-icon>
+        </button>
+
+        <!-- Profile avatar -->
+        <button mat-icon-button [matMenuTriggerFor]="profileMenu" class="profile-avatar-btn">
+          <div class="avatar-small">{{ getInitial(user.userName) }}</div>
+        </button>
+
+        <mat-menu #profileMenu="matMenu" class="profile-menu-panel" xPosition="before">
+          <div class="profile-menu-header" (click)="$event.stopPropagation()">
+            <div class="avatar-medium">{{ getInitial(user.userName) }}</div>
+            <div class="profile-menu-info">
+              <span class="profile-menu-name">{{ user.userName }}</span>
+              <span class="profile-menu-role">{{ user.roleName }}</span>
+            </div>
+          </div>
+          <mat-divider></mat-divider>
+          <button mat-menu-item (click)="openProfile()">
+            <mat-icon>person</mat-icon>
+            <span>Profile Manager</span>
+          </button>
+          <mat-divider></mat-divider>
+          <button mat-menu-item (click)="logout()" class="logout-item">
+            <mat-icon>logout</mat-icon>
+            <span>Log Out</span>
+          </button>
+        </mat-menu>
+      } @else {
+        <app-skeleton-loader type="toolbar"></app-skeleton-loader>
+      }
+    </mat-toolbar>
+
+    <div class="content-area">
+      @if (outletActive) {
+        <router-outlet></router-outlet>
+      }
+    </div>
+  </mat-sidenav-content>
+</mat-sidenav-container>

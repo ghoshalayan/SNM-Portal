@@ -1,0 +1,157 @@
+<div class="org-tree-page">
+  <!-- Page Header -->
+  <div class="page-header">
+    <div class="header-left">
+      <mat-icon class="header-icon">account_tree</mat-icon>
+      <h1>Organization Tree</h1>
+    </div>
+    <span class="header-hint">Drag users from the left panel onto the canvas to build the hierarchy</span>
+  </div>
+
+  @if (loading) {
+    <div class="loading-overlay">
+      <mat-spinner diameter="48"></mat-spinner>
+      <p>Loading organization data...</p>
+    </div>
+  } @else {
+    <div class="org-tree-container">
+      <!-- ─── Left Panel: Unassigned Users ─── -->
+      <div class="unassigned-panel">
+        <div class="panel-header">
+          <mat-icon>person_off</mat-icon>
+          <span>Unassigned ({{ unassignedUsers.length }})</span>
+        </div>
+
+        <div class="user-list">
+          @for (user of unassignedUsers; track trackUser($index, user)) {
+            <div
+              class="user-card"
+              draggable="true"
+              (dragstart)="onDragStart($event, user.userId)"
+              (dragend)="onDragEnd()"
+            >
+              <div class="card-avatar">{{ getInitial(user.userName) }}</div>
+              <div class="card-info">
+                <span class="card-name">{{ user.userName }}</span>
+                <span class="card-role">{{ user.roleName || 'No Role' }}</span>
+              </div>
+              <mat-icon class="drag-handle">drag_indicator</mat-icon>
+            </div>
+          }
+
+          @if (unassignedUsers.length === 0) {
+            <div class="empty-list">
+              <mat-icon>check_circle_outline</mat-icon>
+              <p>All users are assigned</p>
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- ─── Right Panel: Canvas ─── -->
+      <div
+        class="canvas-wrapper"
+        (wheel)="onWheel($event)"
+        (mousedown)="onCanvasMouseDown($event)"
+        (dragover)="onCanvasDragOver($event)"
+        (drop)="onCanvasDrop($event)"
+        [class.panning]="isPanning"
+      >
+        <!-- Zoom Controls -->
+        <div class="zoom-controls">
+          <button mat-mini-fab color="primary" (click)="zoomIn()" matTooltip="Zoom In">
+            <mat-icon>add</mat-icon>
+          </button>
+          <button mat-mini-fab color="primary" (click)="zoomOut()" matTooltip="Zoom Out">
+            <mat-icon>remove</mat-icon>
+          </button>
+          <button mat-mini-fab color="primary" (click)="resetView()" matTooltip="Reset View">
+            <mat-icon>fit_screen</mat-icon>
+          </button>
+        </div>
+
+        <!-- Scale indicator -->
+        <div class="scale-badge">{{ (scale * 100) | number:'1.0-0' }}%</div>
+
+        <!-- Transformable Canvas -->
+        <div class="canvas" [style.transform]="canvasTransform">
+          <!-- SVG Edges Layer -->
+          <svg
+            class="edges-layer"
+            [attr.width]="canvasW"
+            [attr.height]="canvasH"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <defs>
+              <marker
+                id="arrowhead"
+                markerWidth="8"
+                markerHeight="6"
+                refX="8"
+                refY="3"
+                orient="auto"
+              >
+                <polygon points="0 0, 8 3, 0 6" fill="var(--snm-accent)" />
+              </marker>
+            </defs>
+            @for (edge of edges; track edge.targetId) {
+              <path
+                [attr.d]="edge.path"
+                class="edge-line"
+                marker-end="url(#arrowhead)"
+              />
+            }
+          </svg>
+
+          <!-- HTML Nodes -->
+          @for (user of assignedUsers; track trackUser($index, user)) {
+            <div
+              class="org-node"
+              [style.left.px]="user.x"
+              [style.top.px]="user.y"
+              [style.width.px]="NODE_W"
+              [style.height.px]="NODE_H"
+              [class.drop-target]="dropTargetUserId === user.userId"
+              [class.is-dragging]="draggingUserId === user.userId"
+              [class.is-root]="user.reportTo === user.userId"
+              draggable="true"
+              (dragstart)="onDragStart($event, user.userId)"
+              (dragend)="onDragEnd()"
+              (dragover)="onDragOverNode($event, user.userId)"
+              (dragleave)="onDragLeaveNode($event, user.userId)"
+              (drop)="onDropOnNode($event, user.userId)"
+            >
+              <div class="node-avatar" [class.root-avatar]="user.reportTo === user.userId">
+                {{ getInitial(user.userName) }}
+              </div>
+              <div class="node-info">
+                <span class="node-name">{{ user.userName }}</span>
+                <span class="node-role">{{ user.roleName || 'No Role' }}</span>
+                @if (user.userCode) {
+                  <span class="node-code">{{ user.userCode }}</span>
+                }
+              </div>
+              <button
+                class="node-remove"
+                (click)="unassignUser(user.userId, $event)"
+                matTooltip="Remove from tree"
+              >
+                <mat-icon>close</mat-icon>
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- Empty state -->
+        @if (assignedUsers.length === 0) {
+          <div class="empty-canvas">
+            <mat-icon>account_tree</mat-icon>
+            <p>Drop users here to build the organization tree</p>
+            <span>Drag a user from the left panel onto this canvas to make them a root node,<br>
+              then drag more users onto existing nodes to set reporting relationships.</span>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>

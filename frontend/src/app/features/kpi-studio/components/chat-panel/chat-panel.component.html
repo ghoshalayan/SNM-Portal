@@ -1,0 +1,251 @@
+<div class="chat-panel" [class.compact]="compact()">
+  <!-- Sessions sidebar (hidden in compact mode) -->
+  <aside class="sessions" *ngIf="!compact()">
+    <header class="sessions-head">
+      <strong>Chats</strong>
+      <button mat-icon-button (click)="newChat()" matTooltip="New chat">
+        <mat-icon>add</mat-icon>
+      </button>
+    </header>
+    <mat-progress-bar *ngIf="sessionsLoading()" mode="indeterminate"></mat-progress-bar>
+    <ul class="sessions-list">
+      <li *ngFor="let s of sessions(); trackBy: trackSession"
+          class="session-row"
+          [class.active]="s.chat_session_id === active()?.chat_session_id"
+          (click)="openSession(s.chat_session_id)">
+        <div class="session-main">
+          <div class="session-title">{{ s.title || 'Untitled chat' }}</div>
+          <div class="session-meta">
+            {{ s.message_count }} msg · {{ (s.last_message_at || s.updated_at) | date:'short' }}
+          </div>
+        </div>
+        <button mat-icon-button [matMenuTriggerFor]="sessionMenu"
+                (click)="$event.stopPropagation()">
+          <mat-icon>more_vert</mat-icon>
+        </button>
+        <mat-menu #sessionMenu="matMenu">
+          <button mat-menu-item (click)="rename(s)">
+            <mat-icon>edit</mat-icon><span>Rename</span>
+          </button>
+          <button mat-menu-item (click)="confirmDelete(s)">
+            <mat-icon color="warn">delete</mat-icon><span>Delete</span>
+          </button>
+        </mat-menu>
+      </li>
+      <li *ngIf="!sessions().length && !sessionsLoading()" class="empty">
+        No chats yet. Start one with the + button.
+      </li>
+    </ul>
+  </aside>
+
+  <!-- Conversation pane -->
+  <section class="conversation">
+    <header class="conv-head" *ngIf="active() as a">
+      <strong>{{ a.title || 'Untitled chat' }}</strong>
+      <button *ngIf="!compact()"
+              mat-icon-button (click)="rename(a)" matTooltip="Rename">
+        <mat-icon>edit</mat-icon>
+      </button>
+      <span class="spacer"></span>
+      <button *ngIf="compact()"
+              mat-icon-button (click)="newChat()" matTooltip="New chat">
+        <mat-icon>add</mat-icon>
+      </button>
+    </header>
+
+    <div *ngIf="!active() && !sessionsLoading()" class="placeholder">
+      <mat-icon>smart_toy</mat-icon>
+      <h3>Smart Analysis</h3>
+      <p>
+        Ask a question about your data in plain English. The agent will
+        inspect the schema, write SQL, run it, and show you the result.
+      </p>
+      <button mat-flat-button color="primary" (click)="newChat()">
+        <mat-icon>add</mat-icon>
+        New chat
+      </button>
+    </div>
+
+    <div *ngIf="active()"
+         #messageList
+         class="messages"
+         (scroll)="onMessagesScroll($event)">
+      <!-- Rolling summary banner (B3) — shown when the session has been
+           compacted. Older messages are still visible below; this just
+           orients a returning user without re-reading them all. -->
+      <details *ngIf="active()?.rolling_summary" class="summary-banner">
+        <summary>
+          <mat-icon>history_edu</mat-icon>
+          Conversation summary
+        </summary>
+        <p>{{ active()!.rolling_summary }}</p>
+      </details>
+
+      <article *ngFor="let m of messages(); trackBy: trackMessage"
+               class="msg"
+               [class.user]="m.role === 'user'"
+               [class.assistant]="m.role === 'assistant'"
+               [class.failed]="!m.succeeded">
+        <div class="msg-head">
+          <mat-icon class="role-icon">
+            {{ m.role === 'user' ? 'person' : 'smart_toy' }}
+          </mat-icon>
+          <span class="role-name">{{ m.role === 'user' ? 'You' : 'Agent' }}</span>
+          <span class="msg-meta" *ngIf="m.role === 'assistant' && m.model">
+            · {{ m.provider }} · {{ m.model }} · {{ m.tokens }} tokens · {{ m.duration_ms }}ms
+          </span>
+        </div>
+
+        <div class="msg-body">
+          <p class="msg-text"
+             *ngIf="m.content || isTyping(m)"
+             [class.typing]="isTyping(m)">
+            {{ isTyping(m) ? typingText() : m.content }}<span *ngIf="isTyping(m)" class="typing-caret"></span>
+          </p>
+
+          <!-- Assistant SQL block -->
+          <div *ngIf="m.sql" class="sql-block">
+            <div class="sql-label">
+              <mat-icon>terminal</mat-icon>
+              SQL
+            </div>
+            <pre>{{ m.sql }}</pre>
+          </div>
+
+          <!-- Auto-picked chart (B2). Hidden when chart_config.type
+               is "table" since the mat-table below already shows that. -->
+          <div *ngIf="hasChart(m)" class="chart-block">
+            <app-kpi-chart-renderer
+              [result]="asExecutionResult(m)"
+              [chartConfig]="m.chart_config ?? null" />
+          </div>
+
+          <!-- Result table — first 10 rows. Always shown alongside the
+               chart so power users can see the raw data. -->
+          <div *ngIf="m.result_columns?.length" class="result-block">
+            <table mat-table [dataSource]="rowsAsObjects(m)" class="result-table">
+              <ng-container *ngFor="let col of m.result_columns" [matColumnDef]="col">
+                <th mat-header-cell *matHeaderCellDef>{{ col }}</th>
+                <td mat-cell *matCellDef="let row">{{ row[col] }}</td>
+              </ng-container>
+              <tr mat-header-row *matHeaderRowDef="m.result_columns ?? []"></tr>
+              <tr mat-row *matRowDef="let row; columns: m.result_columns ?? []"></tr>
+            </table>
+            <p *ngIf="truncationNote(m)" class="truncated">{{ truncationNote(m) }}</p>
+          </div>
+
+          <!-- Insight narrative (B3) — short LLM analysis of the result. -->
+          <div *ngIf="m.insight" class="insight-block">
+            <div class="insight-label">
+              <mat-icon>auto_awesome</mat-icon>
+              Insight
+            </div>
+            <p class="insight-text">{{ m.insight }}</p>
+          </div>
+
+          <!-- Recommendations (B3) — actionable follow-ups. Rendered as
+               clickable chips that drop the suggestion into the composer. -->
+          <div *ngIf="m.recommendations?.length" class="recommendations">
+            <div class="rec-label">
+              <mat-icon>lightbulb</mat-icon>
+              Suggested next steps
+            </div>
+            <mat-chip-listbox aria-label="Recommendations">
+              <mat-chip-option *ngFor="let r of m.recommendations"
+                               (click)="useRecommendation(r)"
+                               matTooltip="Click to use as your next prompt">
+                {{ r }}
+              </mat-chip-option>
+            </mat-chip-listbox>
+          </div>
+
+          <!-- Save-as-KPI action — only on successful assistant turns
+               with executable SQL (B2). -->
+          <div *ngIf="canSaveAsKpi(m)" class="msg-actions">
+            <button mat-stroked-button color="primary"
+                    (click)="saveAsKpi(m)"
+                    matTooltip="Persist this query + chart as a reusable KPI; optionally add to a dashboard.">
+              <mat-icon>bookmark_add</mat-icon>
+              Save as KPI
+            </button>
+          </div>
+
+          <!-- Error -->
+          <div *ngIf="!m.succeeded && m.error" class="error">
+            <mat-icon>error_outline</mat-icon>
+            <span>{{ m.error }}</span>
+          </div>
+
+          <!-- Agent steps (collapsed list of tool calls) -->
+          <details *ngIf="m.agent_steps?.length" class="steps">
+            <summary>
+              <mat-icon>route</mat-icon>
+              {{ m.agent_steps!.length }} reasoning step{{ m.agent_steps!.length === 1 ? '' : 's' }}
+            </summary>
+            <ol>
+              <li *ngFor="let s of m.agent_steps">
+                <strong>{{ stepLabel(s) }}</strong>
+                <span *ngIf="s.latency_ms != null" class="step-latency">
+                  · {{ s.latency_ms }}ms
+                </span>
+              </li>
+            </ol>
+          </details>
+        </div>
+      </article>
+
+      <!-- Live agent timeline + thinking indicator while a turn is pending.
+           Renders each streamed step as it arrives (Claude-Code-style),
+           with a pulsing tail row showing what the agent is doing right
+           now. -->
+      <div *ngIf="turnPending()" class="agent-timeline">
+        <div *ngFor="let s of liveSteps(); trackBy: trackStep" class="agent-step done">
+          <mat-icon class="step-icon">{{ stepIcon(s) }}</mat-icon>
+          <div class="step-body">
+            <div class="step-label">{{ stepLabel(s) }}</div>
+            <div *ngIf="stepDetail(s)" class="step-detail">{{ stepDetail(s) }}</div>
+          </div>
+          <span *ngIf="s.latency_ms != null" class="step-latency">
+            {{ s.latency_ms }} ms
+          </span>
+        </div>
+        <div class="agent-step pending">
+          <mat-icon class="step-icon spin">autorenew</mat-icon>
+          <div class="step-body">
+            <div class="step-label">{{ pendingTail() }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Composer
+         A custom rounded shell holds the textarea and an inline action
+         button on the right. Three button states:
+           idle (no text)       → disabled up-arrow
+           ready (has text)     → primary up-arrow (click sends)
+           pending (turn live)  → stop icon (click aborts the wait) -->
+    <footer class="composer" *ngIf="active()">
+      <div class="composer-shell"
+           [class.is-ready]="canSend()"
+           [class.is-pending]="turnPending()">
+        <textarea class="composer-input"
+                  rows="2" maxlength="4000"
+                  [ngModel]="composer()"
+                  (ngModelChange)="composer.set($event)"
+                  (keydown)="onComposerKey($event)"
+                  [disabled]="turnPending()"
+                  placeholder="Ask the agent — e.g. Top 10 customers by quotation value this month"></textarea>
+        <button type="button"
+                class="composer-action"
+                (click)="turnPending() ? stop() : send()"
+                [disabled]="!turnPending() && !canSend()"
+                [matTooltip]="turnPending() ? 'Stop' : (canSend() ? 'Send (Enter)' : 'Type a message')"
+                matTooltipPosition="above"
+                [attr.aria-label]="turnPending() ? 'Stop' : 'Send'">
+          <mat-icon>{{ turnPending() ? 'stop' : 'arrow_upward' }}</mat-icon>
+        </button>
+      </div>
+      <div class="composer-hint">Enter to send · Shift+Enter for newline</div>
+    </footer>
+  </section>
+</div>

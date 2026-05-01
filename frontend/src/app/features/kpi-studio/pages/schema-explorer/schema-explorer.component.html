@@ -1,0 +1,254 @@
+<div class="kpi-schema-page">
+  <header class="page-header">
+    <div>
+      <h1>KPI Studio · Schema Explorer</h1>
+      <p class="subtitle" *ngIf="meta() as m; else noMeta">
+        Snapshot #{{ m.snapshot_id }} · {{ m.table_count }} tables ·
+        {{ m.relationship_count }} relationships ·
+        captured {{ m.created_at | date:'medium' }}
+      </p>
+      <ng-template #noMeta>
+        <p class="subtitle">No snapshot yet — load to introspect the database.</p>
+      </ng-template>
+    </div>
+    <div class="actions">
+      <button mat-stroked-button (click)="loadAll()" [disabled]="loading()">
+        <mat-icon>refresh</mat-icon>
+        Reload cached
+      </button>
+      <button mat-flat-button color="primary" (click)="refresh()" [disabled]="refreshing()">
+        <mat-icon>update</mat-icon>
+        Re-introspect now
+      </button>
+    </div>
+  </header>
+
+  <mat-progress-bar *ngIf="loading() || refreshing()" mode="indeterminate"></mat-progress-bar>
+
+  <mat-tab-group>
+    <!-- Tables tab -->
+    <mat-tab label="Tables">
+      <div class="tables-pane">
+        <div class="tables-list">
+          <mat-form-field appearance="outline" class="search">
+            <mat-label>Search tables / columns</mat-label>
+            <input matInput type="search" [ngModel]="searchTerm()" (ngModelChange)="searchTerm.set($event)">
+            <mat-icon matSuffix>search</mat-icon>
+          </mat-form-field>
+
+          <div class="table-cards" *ngIf="!loading(); else loadingTpl">
+            <button
+              *ngFor="let t of filteredTables(); trackBy: trackTable"
+              class="table-card"
+              [class.active]="selectedTableId() === tableId(t)"
+              (click)="selectTable(t)">
+              <span class="table-name">{{ t.name }}</span>
+              <span class="table-meta">
+                {{ t.columns.length }} cols
+                <ng-container *ngIf="t.foreign_keys.length">
+                  · {{ t.foreign_keys.length }} FK
+                </ng-container>
+              </span>
+              <span class="schema-badge" *ngIf="t.schema">{{ t.schema }}</span>
+            </button>
+            <p class="empty" *ngIf="!filteredTables().length">No tables match.</p>
+          </div>
+
+          <ng-template #loadingTpl>
+            <p class="empty">Loading…</p>
+          </ng-template>
+        </div>
+
+        <aside class="table-detail">
+          <ng-container *ngIf="selectedTable() as table; else pickHint">
+            <h2>{{ table.name }}</h2>
+            <p class="table-comment" *ngIf="table.comment">{{ table.comment }}</p>
+
+            <h3>Columns</h3>
+            <table class="columns-grid">
+              <thead>
+                <tr><th>Name</th><th>Type</th><th>Nullable</th><th>PK</th></tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let c of table.columns">
+                  <td>
+                    {{ c.name }}
+                    <mat-icon *ngIf="c.primary_key" class="pk-icon" matTooltip="Primary key">vpn_key</mat-icon>
+                  </td>
+                  <td><code>{{ c.type }}</code></td>
+                  <td>
+                    <mat-icon *ngIf="c.nullable" class="muted-icon">check</mat-icon>
+                    <mat-icon *ngIf="!c.nullable" class="muted-icon">close</mat-icon>
+                  </td>
+                  <td>
+                    <mat-icon *ngIf="c.primary_key" class="muted-icon">check</mat-icon>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <ng-container *ngIf="table.foreign_keys.length">
+              <h3>Foreign keys</h3>
+              <ul class="fk-list">
+                <li *ngFor="let fk of table.foreign_keys">
+                  <code>{{ fk.constrained_columns.join(', ') }}</code>
+                  <mat-icon class="arrow">arrow_forward</mat-icon>
+                  <code>
+                    {{ fk.referred_schema ? fk.referred_schema + '.' : '' }}{{ fk.referred_table }}({{ fk.referred_columns.join(', ') }})
+                  </code>
+                </li>
+              </ul>
+            </ng-container>
+
+            <ng-container *ngIf="table.indexes.length">
+              <mat-expansion-panel class="indexes-panel">
+                <mat-expansion-panel-header>
+                  <mat-panel-title>Indexes ({{ table.indexes.length }})</mat-panel-title>
+                </mat-expansion-panel-header>
+                <ul class="index-list">
+                  <li *ngFor="let i of table.indexes">
+                    <strong>{{ i.name }}</strong>
+                    <mat-chip *ngIf="i.unique" color="accent" disabled>UNIQUE</mat-chip>
+                    <code>{{ i.columns.join(', ') }}</code>
+                  </li>
+                </ul>
+              </mat-expansion-panel>
+            </ng-container>
+          </ng-container>
+
+          <ng-template #pickHint>
+            <p class="empty">Pick a table to inspect its columns, foreign keys, and indexes.</p>
+          </ng-template>
+        </aside>
+      </div>
+    </mat-tab>
+
+    <!-- Graph tab -->
+    <mat-tab label="ER diagram">
+      <div class="graph-pane" *ngIf="graphLayout() as g; else graphEmpty">
+        <p class="hint">
+          {{ graph()?.nodes?.length || 0 }} tables · {{ graph()?.edges?.length || 0 }} relationships.
+          Phase 2 will swap this layout for vis-network with drag/zoom.
+        </p>
+        <svg [attr.viewBox]="'0 0 ' + g.width + ' ' + g.height" class="er-svg" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <marker id="kpi-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--snm-text-muted, #888)" />
+            </marker>
+          </defs>
+          <line *ngFor="let e of g.edges"
+                [attr.x1]="e.from!.x" [attr.y1]="e.from!.y"
+                [attr.x2]="e.to!.x" [attr.y2]="e.to!.y"
+                stroke="var(--snm-border-divider, #aaa)"
+                stroke-width="1.2"
+                marker-end="url(#kpi-arrow)" />
+          <g *ngFor="let n of g.nodes" [attr.transform]="'translate(' + n.x + ',' + n.y + ')'"
+             class="er-node" (click)="selectTableById(n.id)">
+            <rect x="-90" y="-22" width="180" height="44" rx="6"
+                  fill="var(--snm-bg-card, #fff)"
+                  stroke="var(--snm-accent, #4a90e2)" stroke-width="1.2"/>
+            <text text-anchor="middle" y="-3" class="er-label">{{ n.label }}</text>
+            <text text-anchor="middle" y="14" class="er-meta">{{ n.column_count }} columns</text>
+          </g>
+        </svg>
+      </div>
+      <ng-template #graphEmpty>
+        <p class="empty">No graph data — refresh the schema first.</p>
+      </ng-template>
+    </mat-tab>
+
+    <!-- Phase F — Relationships management. The auto-seed button
+         walks the introspector's FK metadata and inserts edges; the
+         create form below lets a SuperAdmin add custom joins (e.g.
+         derived keys with no real FK). -->
+    <mat-tab label="Relationships">
+      <div class="rels-pane">
+        <header class="rels-head">
+          <div>
+            <strong>Table relationships</strong>
+            <p class="hint">
+              Used by the Smart Builder to auto-emit LEFT JOINs when a
+              field references a column from a related table. Auto rows
+              come from FK metadata; manual rows are user-defined.
+            </p>
+          </div>
+          <span class="spacer"></span>
+          <button mat-stroked-button color="primary"
+                  (click)="autoSeedRelationships()"
+                  [disabled]="seedingRels()">
+            <mat-icon>refresh</mat-icon>
+            Auto-seed from FKs
+          </button>
+        </header>
+
+        <mat-progress-bar *ngIf="loadingRels() || seedingRels()" mode="indeterminate"></mat-progress-bar>
+
+        <!-- Manual create form -->
+        <details class="rel-create">
+          <summary>Add a manual relationship</summary>
+          <div class="rel-create-grid">
+            <mat-form-field appearance="outline">
+              <mat-label>From table</mat-label>
+              <input matInput [ngModel]="newRel().from_table"
+                     (ngModelChange)="patchNewRel('from_table', $event)"
+                     placeholder="enquiries">
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>From column (FK)</mat-label>
+              <input matInput [ngModel]="newRel().from_column"
+                     (ngModelChange)="patchNewRel('from_column', $event)"
+                     placeholder="customer_id">
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>To table</mat-label>
+              <input matInput [ngModel]="newRel().to_table"
+                     (ngModelChange)="patchNewRel('to_table', $event)"
+                     placeholder="customers">
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>To column (PK)</mat-label>
+              <input matInput [ngModel]="newRel().to_column"
+                     (ngModelChange)="patchNewRel('to_column', $event)"
+                     placeholder="id">
+            </mat-form-field>
+            <button mat-flat-button color="primary"
+                    (click)="createRelationship()"
+                    [disabled]="!canCreateRel()">
+              <mat-icon>add</mat-icon>
+              Add
+            </button>
+          </div>
+        </details>
+
+        <!-- Edge list -->
+        <div class="rel-list" *ngIf="relationships().length; else relsEmpty">
+          <div *ngFor="let r of relationships()" class="rel-row">
+            <mat-chip class="rel-source" [class.auto]="r.source === 'auto'"
+                      [class.manual]="r.source === 'manual'" disabled>
+              {{ r.source }}
+            </mat-chip>
+            <span class="rel-from">
+              <strong>{{ r.from_table }}</strong>.{{ r.from_column }}
+            </span>
+            <mat-icon class="rel-arrow">arrow_forward</mat-icon>
+            <span class="rel-to">
+              <strong>{{ r.to_table }}</strong>.{{ r.to_column }}
+            </span>
+            <span class="rel-card">{{ r.cardinality }}</span>
+            <button mat-icon-button matTooltip="Remove"
+                    (click)="deleteRelationship(r)">
+              <mat-icon>delete</mat-icon>
+            </button>
+          </div>
+        </div>
+        <ng-template #relsEmpty>
+          <p class="empty">
+            No relationships yet. Click <strong>Auto-seed from FKs</strong>
+            to import from the database, or add one manually.
+          </p>
+        </ng-template>
+      </div>
+    </mat-tab>
+  </mat-tab-group>
+</div>

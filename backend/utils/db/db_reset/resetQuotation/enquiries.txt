@@ -1,0 +1,53 @@
+-- ============================================
+-- TRUNCATE Quotations + Enquiries + Cascades
+-- Run in SQL Server Management Studio
+-- ============================================
+
+-- Disable FK checks temporarily
+-- (SQL Server doesn't support TRUNCATE with FK refs,
+--  so we DELETE instead)
+
+-- === Quotation cascade (children first) ===
+DELETE FROM QuotFollowUp;
+DELETE FROM QuotTermsNConditions;
+DELETE FROM QuotDetails;
+DELETE FROM RawMaterialCostLog;   -- if any logs reference quotations
+DELETE FROM OwnershipTransfer WHERE entityType = 'quotation';
+
+-- Assets linked to quotations
+DELETE FROM Asset WHERE quotId IS NOT NULL;
+
+-- Communication logs linked to quotations
+DELETE FROM CommunicationLog WHERE quoteid IS NOT NULL;
+
+-- Quotation headers
+DELETE FROM QuotSummary;
+
+-- === Enquiry cascade (children first) ===
+DELETE FROM CustomerEnqFollowUp;
+DELETE FROM CustomerEnquiryCosting;
+DELETE FROM CustomerEnquiryDetails;
+
+-- Assets linked to enquiries
+DELETE FROM Asset WHERE enqid IS NOT NULL;
+
+-- Communication logs linked to enquiries
+DELETE FROM CommunicationLog WHERE enqid IS NOT NULL;
+
+-- Ownership transfers for enquiries
+DELETE FROM OwnershipTransfer WHERE entityType = 'enquiry';
+
+-- Enquiry headers
+DELETE FROM CustomerEnquiry;
+
+-- === Reset identity seeds (optional) ===
+DBCC CHECKIDENT ('QuotFollowUp', RESEED, 0);
+DBCC CHECKIDENT ('QuotTermsNConditions', RESEED, 0);
+DBCC CHECKIDENT ('QuotDetails', RESEED, 0);
+DBCC CHECKIDENT ('QuotSummary', RESEED, 0);
+DBCC CHECKIDENT ('CustomerEnqFollowUp', RESEED, 0);
+DBCC CHECKIDENT ('CustomerEnquiryCosting', RESEED, 0);
+DBCC CHECKIDENT ('CustomerEnquiryDetails', RESEED, 0);
+DBCC CHECKIDENT ('CustomerEnquiry', RESEED, 0);
+
+PRINT 'Done — all enquiry and quotation data deleted.';
