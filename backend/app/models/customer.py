@@ -69,5 +69,6 @@ class CustomerSite(Base, AuditMixin):
     contactPhone3 = Column(String(20), nullable=True)
     contactEmail3 = Column(String(100), nullable=True)
     isHeadOffice = Column(Boolean, default=False, nullable=False)
+    isAdHoc = Column(Boolean, default=False, nullable=False)
 
     customer = relationship("CustomerMaster", back_populates="sites")

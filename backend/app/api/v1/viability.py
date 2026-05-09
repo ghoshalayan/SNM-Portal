@@ -149,12 +149,11 @@ def create_viability(
         except ValueError as e:
             raise HTTPException(400, str(e))
 
-        # Propagate quotation status: Matured → ViabilityGenerated on first generate
-        if quotation.status == "Matured":
-            from app.core.timezone import now_ist
-            quotation.status = "ViabilityGenerated"
-            quotation.lastupdateby = ctx.user_id
-            quotation.lastupdateon = now_ist()
+        # Phase 1: per-stage statuses are the source of truth for the
+        # lifecycle position past Convert. The quotation stays at
+        # ``Converted``; the new viability sheet's own ``status``
+        # ('Draft' on creation) tells the workspace where Stage 3 sits.
+        if quotation.status == "Converted":
             log_action(db, quot_id=quotation.quotId, company_id=quotation.companyId,
                        action="Viability Sheet Generated", status=quotation.status,
                        user_id=ctx.user_id)
@@ -307,7 +306,14 @@ def approve_viability(
     )
     quot_id_for_log = sheet_row.quotId if sheet_row else 0
     try:
-        require_permission(MENU, "CanApprove", ctx)
+        # Per-stage approval gate. Phase-1 added ``CanApproveViability`` as
+        # a granular flag distinct from quotation-level ``CanApprove``;
+        # this endpoint historically still consulted the quotation flag,
+        # which collapsed the segregation of duties the granular flag was
+        # introduced for. Migration ``v3w4x5y6z7a8`` backfills the new
+        # flag from ``CanApprove`` for existing roles so this switch is
+        # transparent on first deploy.
+        require_permission(MENU, "CanApproveViability", ctx)
         sheet = _get_sheet_or_403(db, viability_id, ctx)
         if sheet.status == "Approved":
             return sheet
@@ -317,15 +323,11 @@ def approve_viability(
         sheet.lastupdateby = ctx.user_id
         sheet.lastupdateon = now_ist()
 
-        # Propagate quotation status: ViabilityGenerated → ViabilityApproved
-        # (also handle the case where a sheet was generated before the status
-        # propagation was in place and the quotation is still at 'Matured')
+        # Phase 1: per-stage statuses are the source of truth for the
+        # lifecycle position. ``QuotViabilitySheet.status`` flips to
+        # 'Approved' here; the parent quotation stays at 'Converted'.
         from app.models.quotation import QuotSummary
         quotation = db.query(QuotSummary).filter(QuotSummary.quotId == sheet.quotId).first()
-        if quotation and quotation.status in ("Matured", "ViabilityGenerated"):
-            quotation.status = "ViabilityApproved"
-            quotation.lastupdateby = ctx.user_id
-            quotation.lastupdateon = now_ist()
         log_action(db, quot_id=sheet.quotId, company_id=sheet.companyId,
                    action="Viability Sheet Approved",
                    status=quotation.status if quotation else None,

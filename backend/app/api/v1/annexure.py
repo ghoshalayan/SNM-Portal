@@ -71,11 +71,9 @@ def create_annexure(
         except ValueError as e:
             raise HTTPException(400, str(e))
 
-        # Propagate quotation status: ViabilityApproved → AnnexureGenerated
-        if quotation.status == "ViabilityApproved":
-            quotation.status = "AnnexureGenerated"
-            quotation.lastupdateby = ctx.user_id
-            quotation.lastupdateon = now_ist()
+        # Phase 1: per-stage statuses are the source of truth. The
+        # annexure has its own ``status``='Draft' on creation; the
+        # parent quotation stays at 'Converted'.
         log_action(db, quot_id=quotation.quotId, company_id=quotation.companyId,
                    action="Annexure Generated", status=quotation.status, user_id=ctx.user_id)
 
@@ -208,12 +206,10 @@ def approve_annexure(
         ann.lastupdateby = ctx.user_id
         ann.lastupdateon = now_ist()
 
-        # Propagate quotation status: AnnexureGenerated → AnnexureApproved
+        # Phase 1: per-stage statuses are the source of truth. The
+        # annexure's ``status`` flips to 'Approved'; the parent
+        # quotation stays at 'Converted'.
         quotation = db.query(QuotSummary).filter(QuotSummary.quotId == ann.quotId).first()
-        if quotation and quotation.status == "AnnexureGenerated":
-            quotation.status = "AnnexureApproved"
-            quotation.lastupdateby = ctx.user_id
-            quotation.lastupdateon = now_ist()
         log_action(db, quot_id=ann.quotId, company_id=ann.companyId,
                    action="Annexure Approved",
                    status=quotation.status if quotation else None,

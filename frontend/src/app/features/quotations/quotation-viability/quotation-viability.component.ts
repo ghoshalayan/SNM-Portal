@@ -18,6 +18,10 @@ import { MatInputModule } from '@angular/material/input';
 import { environment } from '../../../../environments/environment';
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
+import { MenuService } from '../../../core/services/menu.service';
+import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
+import { VersionSelectorComponent } from '../version-selector/version-selector.component';
+import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
 import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialog/confirm-dialog.component';
 import {
   TextPromptDialogComponent,
@@ -110,71 +114,99 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
     MatProgressSpinnerModule, MatTooltipModule, MatMenuModule,
     MatCheckboxModule, MatBadgeModule, MatSelectModule, MatFormFieldModule,
     MatInputModule,
+    VersionSelectorComponent,
+    StaleBannerComponent,
   ],
   template: `
-    <mat-card class="viab-card">
-      <mat-card-header>
-        <mat-card-title>
-          <mat-icon class="viab-title-icon">query_stats</mat-icon>
-          Viability Sheet
-          @if (sheet) {
-            <span class="viab-status" [class.viab-status-approved]="sheet.status === 'Approved'">
-              {{ sheet.status }}
-            </span>
-          }
-        </mat-card-title>
-        <mat-card-subtitle>
-          Compare the Working Sheet with the adjusted Viability Sheet. Use goal-seek per line to hit a target Total Rs/MT.
-        </mat-card-subtitle>
-
-        <span class="viab-spacer"></span>
-
-        @if (sheet) {
-          <button mat-icon-button class="viab-tool-btn"
-            (click)="toggleCompactMode()"
-            [color]="compactMode ? 'primary' : undefined"
-            [matTooltip]="compactMode ? 'Show all columns' : 'Compact view — hide empty columns'">
-            <mat-icon>{{ compactMode ? 'unfold_more' : 'unfold_less' }}</mat-icon>
-          </button>
-          <button mat-icon-button class="viab-tool-btn"
-            [matMenuTriggerFor]="viabColMenu"
-            [matBadge]="hiddenHeadCount > 0 ? hiddenHeadCount : null"
-            matBadgeColor="warn" matBadgeSize="small"
-            matTooltip="Show / hide cost head columns">
-            <mat-icon>view_column</mat-icon>
-          </button>
-          <mat-menu #viabColMenu="matMenu" class="col-picker-menu" xPosition="before">
-            <div class="cp-header" (click)="$event.stopPropagation()">
-              <span>Cost Head Columns</span>
-              <button mat-button color="primary" type="button" (click)="showAllHeads()">Reset</button>
-            </div>
-            <div class="cp-body" (click)="$event.stopPropagation()">
-              @for (h of costHeads; track h) {
-                <mat-checkbox
-                  [checked]="!hiddenCostHeads.has(h)"
-                  (change)="toggleCostHead(h, $event.checked)"
-                  class="cp-item">
-                  {{ costHeadLabel[h] || h }}
-                </mat-checkbox>
+    <mat-card class="stage-card viab-card">
+      <div class="stage-card-head">
+        <div class="stage-card-head-left">
+          <mat-icon class="stage-card-head-icon">query_stats</mat-icon>
+          <div class="stage-card-head-text">
+            <div class="stage-card-head-title">
+              Viability Sheet
+              @if (sheet) {
+                <span class="stage-status-chip" [class.is-approved]="sheet.status === 'Approved'">
+                  {{ sheet.status }}
+                </span>
+                <app-version-selector
+                  [quotId]="quotId"
+                  stage="viability"
+                  [headVersion]="sheet.versionNo || 1"
+                  [canRestore]="canUnlockEditViability"
+                  (restored)="stageChanged.emit()">
+                </app-version-selector>
               }
             </div>
-          </mat-menu>
-        }
+            <div class="stage-card-head-meta">
+              Compare the Working Sheet with the adjusted Viability Sheet. Use goal-seek per line to hit a target Total Rs/MT.
+            </div>
+          </div>
+        </div>
 
-        @if (sheet && sheet.status === 'Draft' && canApprove) {
-          <button mat-stroked-button color="primary" (click)="approve()" [disabled]="busy">
-            <mat-icon>verified</mat-icon> Approve Viability
-          </button>
-        }
-        @if (sheet) {
-          <button mat-stroked-button (click)="downloadExcel()" [disabled]="busy"
-            matTooltip="Download both sheets in one workbook">
-            <mat-icon>download</mat-icon> Download Excel
-          </button>
-        }
-      </mat-card-header>
+        <div class="stage-card-head-actions">
+          @if (sheet) {
+            <button mat-icon-button class="viab-tool-btn"
+              (click)="toggleCompactMode()"
+              [color]="compactMode ? 'primary' : undefined"
+              [matTooltip]="compactMode ? 'Show all columns' : 'Compact view — hide empty columns'">
+              <mat-icon>{{ compactMode ? 'unfold_more' : 'unfold_less' }}</mat-icon>
+            </button>
+            <button mat-icon-button class="viab-tool-btn"
+              [matMenuTriggerFor]="viabColMenu"
+              [matBadge]="hiddenHeadCount > 0 ? hiddenHeadCount : null"
+              matBadgeColor="warn" matBadgeSize="small"
+              matTooltip="Show / hide cost head columns">
+              <mat-icon>view_column</mat-icon>
+            </button>
+            <mat-menu #viabColMenu="matMenu" class="col-picker-menu" xPosition="before">
+              <div class="cp-header" (click)="$event.stopPropagation()">
+                <span>Cost Head Columns</span>
+                <button mat-button color="primary" type="button" (click)="showAllHeads()">Reset</button>
+              </div>
+              <div class="cp-body" (click)="$event.stopPropagation()">
+                @for (h of costHeads; track h) {
+                  <mat-checkbox
+                    [checked]="!hiddenCostHeads.has(h)"
+                    (change)="toggleCostHead(h, $event.checked)"
+                    class="cp-item">
+                    {{ costHeadLabel[h] || h }}
+                  </mat-checkbox>
+                }
+              </div>
+            </mat-menu>
+          }
+          @if (sheet && sheet.status === 'Draft' && canApprove) {
+            <button mat-stroked-button color="primary" (click)="approve()" [disabled]="busy">
+              <mat-icon>verified</mat-icon> Approve Viability
+            </button>
+          }
+          @if (sheet && sheet.status === 'Approved' && canUnlockEditViability) {
+            <button mat-stroked-button color="warn" (click)="openUnlockDialog()" [disabled]="busy"
+              matTooltip="Privileged: unlock this approved viability sheet for in-place edits (audited)">
+              <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
+            </button>
+          }
+          @if (sheet) {
+            <button mat-stroked-button (click)="downloadExcel()" [disabled]="busy"
+              matTooltip="Download both sheets in one workbook">
+              <mat-icon>download</mat-icon> Download Excel
+            </button>
+          }
+        </div>
+      </div>
 
       <mat-card-content>
+        <app-stale-banner
+          *ngIf="sheet"
+          [stale]="isViabilityStaleVsPo()"
+          stageLabel="Viability Sheet"
+          title="Viability is stale relative to the PO"
+          [message]="viabStaleMessage()"
+          [canResource]="canUnlockEditViability"
+          [busy]="resourcing"
+          (resource)="reSource.emit()">
+        </app-stale-banner>
         @if (loading) {
           <div class="viab-spinner"><mat-spinner diameter="40"></mat-spinner></div>
         } @else if (!sheet) {
@@ -420,33 +452,9 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
     </mat-card>
   `,
   styles: [`
-    .viab-card { margin-top: 20px; }
-    .viab-card mat-card-title {
-      display: flex; align-items: center; gap: 8px; font-size: 18px;
-    }
-    .viab-title-icon { color: var(--snm-accent-dark, #3a6bb5); }
-    .viab-status {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 600;
-      background: rgba(158,158,158,0.15);
-      color: var(--snm-text-secondary);
-      border: 1px solid rgba(158,158,158,0.3);
-    }
-    .viab-status-approved {
-      background: rgba(46,125,50,0.15);
-      color: #4caf50;
-      border-color: rgba(46,125,50,0.3);
-    }
-    .viab-spacer { flex: 1; }
-
-    mat-card-header {
-      display: flex; align-items: center; gap: 8px;
-      flex-wrap: wrap;
-    }
-    mat-card-header button { margin-left: 6px; }
+    /* Card chrome (head strip, status chip, action cluster) is shared
+       across all four lifecycle stage cards via the stage-card classes
+       in styles.scss. Only the viability-specific bits live here. */
     .viab-tool-btn { width: 36px; height: 36px; }
 
     .viab-spinner { display: flex; justify-content: center; padding: 40px 0; }
@@ -642,6 +650,19 @@ export class QuotationViabilityComponent implements OnChanges {
   @Input({ required: true }) quotId!: number;
   @Input() canApprove = false;
   @Input() readOnly = false;
+  // Phase 1 Unlock-and-Edit flag for the Viability stage. Resolved
+  // from the menu service in the constructor (privileged users only).
+  canUnlockEditViability = false;
+  // Phase 3 — current PO head versionNo (the upstream this stage
+  // sources from). Parent passes it; we compare to ``sheet.sourcedFromPOVersion``
+  // to surface a stale banner when the PO has moved on.
+  @Input() upstreamPoVersion: number | null = null;
+  // Mirrors the form's ``resourcing`` flag for the inline spinner on
+  // the Re-source button.
+  @Input() resourcing = false;
+  /** Fires when the user clicks Re-source on the stale banner. The
+   *  parent owns the API call (single dispatcher across stages). */
+  @Output() reSource = new EventEmitter<void>();
 
   /** Fires after a state-changing action (generate / approve) so the parent
    * quotation-form can re-sync its status, stepper, and tab locks. */
@@ -713,7 +734,11 @@ export class QuotationViabilityComponent implements OnChanges {
     private http: HttpClient,
     private notify: NotificationService,
     private dialog: MatDialog,
+    private menuService: MenuService,
   ) {
+    this.canUnlockEditViability = this.menuService.hasPermission(
+      'Quotations', 'canUnlockEditViability',
+    );
     this.loadColumnPrefs();
     this.loadMasters();
   }
@@ -1038,6 +1063,43 @@ export class QuotationViabilityComponent implements OnChanges {
           this.notify.error(e?.error?.detail || 'Approval failed.');
         },
       });
+    });
+  }
+
+  /** Phase 3: viability is stale when its stamped PO version is
+   *  older than the current PO head's versionNo. */
+  isViabilityStaleVsPo(): boolean {
+    if (!this.sheet || this.upstreamPoVersion == null) return false;
+    const stamp = this.sheet.sourcedFromPOVersion;
+    return stamp != null && stamp < this.upstreamPoVersion;
+  }
+
+  viabStaleMessage(): string {
+    const stamp = this.sheet?.sourcedFromPOVersion ?? '?';
+    const head = this.upstreamPoVersion ?? '?';
+    return (
+      `Sourced from PO v${stamp}; current PO head is v${head}. ` +
+      `Re-source to regenerate the viability sheet from the latest PO Working Sheet.`
+    );
+  }
+
+  /** Privileged Unlock-and-Edit on the viability sheet. Opens the
+   *  shared reason-prompt dialog; on success the audit row is
+   *  written and the parent re-fetches so locked-state UI clears. */
+  openUnlockDialog(): void {
+    if (!this.sheet) return;
+    const ref = this.dialog.open(LifecycleUnlockDialogComponent, {
+      data: {
+        quotationId: this.quotId,
+        stage: 'viability',
+        stageLabel: 'Viability',
+      },
+      width: '560px',
+      maxWidth: '95vw',
+      disableClose: true,
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.stageChanged.emit();
     });
   }
 

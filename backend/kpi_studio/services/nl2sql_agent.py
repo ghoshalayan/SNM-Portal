@@ -40,7 +40,11 @@ log = logging.getLogger(__name__)
 
 # Defaults — override via API request payload if needed.
 DEFAULT_MAX_ITERATIONS = 8
-DEFAULT_TOKEN_BUDGET = 50_000
+# 100k: previously 50k, but with Planner+Resolver running before this
+# agent + the System Knowledge Hub blob + auto-retries on SQL errors,
+# the old cap was tripping users on legitimately complex questions.
+# Admins can still tighten via KpiSettings.token_budget.
+DEFAULT_TOKEN_BUDGET = 100_000
 DEFAULT_MAX_TOKENS_PER_CALL = 4_000
 
 
@@ -77,6 +81,17 @@ Be efficient — most questions need 2-4 tool calls before propose_sql.
 
 
 @dataclass
+class ExecutedSqlResult:
+    """Shape ``execute_sql_fn`` is expected to return on success. Lives
+    here (not in ``executor``) to avoid circular-import gymnastics —
+    chat_service builds a small adapter that wraps the real executor
+    in this lightweight container before passing it to ``run_agent``."""
+    columns: list[str]
+    rows: list[list[Any]]
+    rewritten_sql: str = ""
+
+
+@dataclass
 class AgentStep:
     """One observable event in the agent loop."""
     type: str  # "tool_call" | "tool_error" | "thought" | "final" | "abort"
@@ -101,6 +116,15 @@ class AgentResult:
     safety: Optional[SafeQuery] = None
     safety_error: Optional[str] = None
     safety_findings: list[str] = field(default_factory=list)
+    # Populated when ``execute_sql_fn`` is supplied to ``run_agent``:
+    # the agent owns execution + retry, so it carries the post-execute
+    # payload back instead of forcing the caller to re-run the query.
+    # Caller checks ``executed_columns is not None`` to decide whether
+    # to skip its own ``execute_safe_query`` step.
+    executed_columns: Optional[list[str]] = None
+    executed_rows: Optional[list[list[Any]]] = None
+    executed_rewritten_sql: Optional[str] = None
+    sql_retries_used: int = 0
     provider: str = ""
     model: str = ""
 
@@ -132,6 +156,10 @@ def run_agent(
     on_step: Optional[Callable[[AgentStep], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     system_prompt_extras: Optional[str] = None,
+    original_prompt: Optional[str] = None,
+    history: Optional[list[LlmMessage]] = None,
+    execute_sql_fn: Optional[Callable[[str], "ExecutedSqlResult"]] = None,
+    max_sql_retries: int = 3,
 ) -> AgentResult:
     """Run the agent loop until ``propose_sql`` or a cap fires.
 
@@ -147,6 +175,27 @@ def run_agent(
     (the System Knowledge Hub) appended to the system message under an
     "Application context" header so the LLM has domain meaning before it
     starts exploring the schema.
+
+    ``original_prompt`` (optional) is the user's *raw* message before any
+    pre-flight rewriting. When supplied, ``user_prompt`` is the cleaned
+    Planner-disambiguated intent and ``original_prompt`` rides along in
+    the system message so the agent can mirror the user's voice in its
+    explanation. When None, ``user_prompt`` is treated as both.
+
+    ``execute_sql_fn`` (optional) lets the agent own SQL execution.
+    When supplied, ``propose_sql`` is followed by an inline call to
+    this function; on success the result columns/rows are stamped on
+    :class:`AgentResult` and the run terminates. On failure the error
+    is fed back to the LLM as a tool-result message so it can fix the
+    SQL and try again, up to ``max_sql_retries`` times. When None
+    (legacy mode), ``run_agent`` returns immediately on propose_sql and
+    the caller runs the executor itself.
+
+    ``max_sql_retries`` caps the auto-fix loop. Each retry costs one
+    additional agent iteration, so the iteration budget should be at
+    least ``max_iterations + max_sql_retries`` to leave headroom; the
+    code degrades gracefully when iterations run out (final retry's
+    error becomes the result error).
     """
     user_prompt = (user_prompt or "").strip()
     if not user_prompt:
@@ -181,7 +230,39 @@ def run_agent(
     # Application context block. Wrapped in clear delimiters so the model
     # treats the extras as authoritative domain knowledge, not user data.
     system_content = _SYSTEM_PROMPT.format(dialect=dialect_label)
+
+    # Current request context — kills the @company_id placeholder bug
+    # we kept seeing where the LLM wrote parameterised SQL expecting a
+    # bind layer. This dialect doesn't have one; the agent must use
+    # literals. Spell out the values so it has nothing to "guess".
+    ctx_lines: list[str] = []
+    if company_id is not None:
+        ctx_lines.append(f"- Current company: companyId = {company_id}")
+    if user_id is not None:
+        ctx_lines.append(f"- Calling user: userId = {user_id}")
+    if ctx_lines:
+        system_content += (
+            "\n--- Current request context (use these LITERAL values in WHERE clauses; "
+            "do NOT use @placeholders — there is no bind layer) ---\n"
+            + "\n".join(ctx_lines) + "\n"
+            "--- End request context ---\n"
+        )
+
     extras = (system_prompt_extras or "").strip()
+    raw_prompt = (original_prompt or "").strip()
+    # When the caller supplies a separate raw prompt (the chat user's
+    # actual wording), surface it under its own header so the agent can
+    # mirror the user's voice in its explanation. The ``user_prompt``
+    # arg in this case is the Planner's disambiguated intent and reads
+    # cleaner / more deterministic — both serve the agent.
+    if raw_prompt and raw_prompt != user_prompt:
+        system_content = (
+            f"{system_content}\n"
+            "--- User's original wording (for tone matching only — "
+            "answer the disambiguated intent below) ---\n"
+            f"{raw_prompt}\n"
+            "--- End user wording ---\n"
+        )
     if extras:
         system_content = (
             f"{system_content}\n"
@@ -190,10 +271,17 @@ def run_agent(
             "--- End application context ---\n"
         )
 
+    # Phase B2 — recent (user, assistant) pairs precede the latest
+    # user_prompt so follow-up references like "now group THAT by
+    # region" can resolve "that" against the prior turns of the
+    # conversation. The chat caller curates the list (count + content);
+    # the agent just splices it in.
     messages: list[LlmMessage] = [
         LlmMessage(role="system", content=system_content),
-        LlmMessage(role="user", content=user_prompt),
     ]
+    if history:
+        messages.extend(history)
+    messages.append(LlmMessage(role="user", content=user_prompt))
 
     result = AgentResult(
         sql="",
@@ -233,16 +321,21 @@ def run_agent(
             result.total_tokens += int(turn.usage.get("total_tokens") or 0)
 
             # Budget check — fire-and-stop with a clean abort step.
+            # User-facing label is plain English; technical numbers live
+            # on ``output`` so admins can still see them in the
+            # collapsible reasoning-steps panel.
             if result.total_tokens > token_budget:
                 _emit(AgentStep(
                     type="abort",
-                    error=(
-                        f"Token budget exceeded: {result.total_tokens} > {token_budget}. "
-                        "Refine your prompt or raise KPI_NL_TOKEN_BUDGET."
-                    ),
+                    error="Question is too complex for one round.",
+                    output={
+                        "kind": "token_budget",
+                        "tokens_used": result.total_tokens,
+                        "budget": token_budget,
+                    },
                 ))
                 result.succeeded = False
-                result.error = "token_budget_exceeded"
+                result.error = "token_budget"
                 return result
 
             # No tool calls + non-empty content → model gave up on
@@ -269,9 +362,9 @@ def run_agent(
             )
             messages.append(assistant_msg)
 
-            # Process each tool call. If propose_sql shows up, terminate
-            # immediately — even if the model bundled other tool calls
-            # alongside it (which OpenAI sometimes does).
+            # Process each tool call. If propose_sql shows up we may
+            # terminate (legacy mode) OR run-then-retry (when
+            # ``execute_sql_fn`` is supplied) — see below.
             for tc in turn.tool_calls:
                 if tc.name == "propose_sql":
                     _emit(AgentStep(
@@ -283,11 +376,17 @@ def run_agent(
                     explanation = (tc.arguments.get("explanation") or "").strip()
                     result.sql = sql
                     result.explanation = explanation
+                    safety_failed = False
                     if sql:
                         try:
                             result.safety = validate_select_query(
                                 sql, dialect=safe_dialect,
                             )
+                            # Reset on success — the LLM might fix the
+                            # SQL on a retry, so a stale safety_error
+                            # from a prior round shouldn't hang around.
+                            result.safety_error = None
+                            result.safety_findings = []
                         except SqlSafetyError as exc:
                             result.safety_error = str(exc)
                             result.safety_findings = list(
@@ -297,7 +396,91 @@ def run_agent(
                                 "kpi_studio.nl2sql_agent: validation failed: %s",
                                 result.safety_error,
                             )
-                    return result
+                            safety_failed = True
+
+                    # Empty SQL = "I give up, can't answer". Always terminal.
+                    if not sql:
+                        return result
+                    # Safety failure is terminal too — the LLM produced
+                    # syntactically forbidden SQL (DDL/DML/EXEC). No
+                    # point retrying without a clear "fix" handle; the
+                    # validator's message is on result.safety_error.
+                    if safety_failed:
+                        return result
+
+                    # Legacy path — caller runs execution.
+                    if execute_sql_fn is None:
+                        return result
+
+                    # Inline execution + retry path.
+                    exec_started = time.perf_counter()
+                    try:
+                        exec_out = execute_sql_fn(sql)
+                        exec_latency = int((time.perf_counter() - exec_started) * 1000)
+                        _emit(AgentStep(
+                            type="tool_call",
+                            tool="execute_sql",
+                            args={"sql_chars": len(sql)},
+                            output={
+                                "rows": len(exec_out.rows),
+                                "columns": list(exec_out.columns),
+                            },
+                            latency_ms=exec_latency,
+                        ))
+                        result.executed_columns = list(exec_out.columns)
+                        result.executed_rows = list(exec_out.rows)
+                        result.executed_rewritten_sql = exec_out.rewritten_sql or sql
+                        result.succeeded = True
+                        return result
+                    except Exception as exc:  # noqa: BLE001
+                        exec_latency = int((time.perf_counter() - exec_started) * 1000)
+                        result.sql_retries_used += 1
+                        _emit(AgentStep(
+                            type="tool_error",
+                            tool="execute_sql",
+                            error=str(exc)[:500],
+                            latency_ms=exec_latency,
+                        ))
+                        if result.sql_retries_used > max_sql_retries:
+                            result.succeeded = False
+                            # Use a stable error code that
+                            # ``_friendly_failure_message`` can translate
+                            # for end users; the underlying exception is
+                            # already on the most recent ``tool_error``
+                            # step for admins to inspect.
+                            result.error = "execution_failed"
+                            return result
+                        # Feed the error back as a tool result so the
+                        # LLM can correct on the next iteration. We
+                        # synthesise a tool_call_id since propose_sql
+                        # was the trigger but its tc.id may have
+                        # already been "used" by the model.
+                        retry_left = max_sql_retries - result.sql_retries_used
+                        messages.append(LlmMessage(
+                            role="tool",
+                            content=json.dumps({
+                                "error": "SQL execution failed",
+                                "details": str(exc)[:1000],
+                                "retries_remaining": retry_left,
+                                "hint": (
+                                    "Common causes: undeclared variables (use "
+                                    "literal values from the request context "
+                                    "block — there is NO @placeholder bind "
+                                    "layer), wrong column names, wrong join "
+                                    "keys, or unsupported syntax for this "
+                                    "dialect. Re-call propose_sql with a "
+                                    "fixed query, or call propose_sql with "
+                                    "sql=\"\" to give up."
+                                ),
+                            }),
+                            tool_call_id=tc.id,
+                        ))
+                        # Reset SQL — the next propose_sql replaces it.
+                        result.sql = ""
+                        result.explanation = ""
+                        break  # leave the for-tc loop, continue agent iter
+
+                step_started = time.perf_counter()
 
                 step_started = time.perf_counter()
                 try:
@@ -329,20 +512,29 @@ def run_agent(
                     tool_call_id=tc.id,
                 ))
 
-        # Iteration cap reached without a propose_sql.
+        # Iteration cap reached without a propose_sql. User-facing message
+        # is a plain-English summary; the technical detail (how many rounds,
+        # which env var to bump) lives on ``output`` for the admin-facing
+        # reasoning-steps panel.
         _emit(AgentStep(
             type="abort",
-            error=(
-                f"Reached iteration limit ({max_iterations}) without a final "
-                "answer. Refine your prompt or raise KPI_NL_MAX_ITERATIONS."
-            ),
+            error="I went back and forth without landing on a clear answer.",
+            output={
+                "kind": "iteration_limit",
+                "iterations": max_iterations,
+                "hint": "Refine the prompt or raise KPI_NL_MAX_ITERATIONS.",
+            },
         ))
         result.succeeded = False
         result.error = "iteration_limit"
         return result
 
     except AgentCancelled:
-        _emit(AgentStep(type="abort", error="cancelled_by_user"))
+        _emit(AgentStep(
+            type="abort",
+            error="Stopped at your request.",
+            output={"kind": "cancelled_by_user"},
+        ))
         result.succeeded = False
         result.error = "cancelled"
         return result

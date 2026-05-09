@@ -32,6 +32,10 @@ import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialo
 import { QuotationViabilityComponent } from '../quotation-viability/quotation-viability.component';
 import { QuotationStepperComponent } from '../quotation-stepper/quotation-stepper.component';
 import { QuotationAnnexureComponent } from '../quotation-annexure/quotation-annexure.component';
+import { QuotationPoDialogComponent } from '../quotation-po-dialog/quotation-po-dialog.component';
+import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
+import { VersionSelectorComponent } from '../version-selector/version-selector.component';
+import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
 
 export interface Enquiry {
   enqid: number;
@@ -109,6 +113,8 @@ export interface VersionEntry {
     QuotationViabilityComponent,
     QuotationStepperComponent,
     QuotationAnnexureComponent,
+    VersionSelectorComponent,
+    StaleBannerComponent,
   ],
   template: `
     <div class="quotation-form-container" [class.wide-mode]="lineItemsExpanded">
@@ -143,17 +149,21 @@ export interface VersionEntry {
             <mat-icon>check_circle</mat-icon> Approve
           </button>
 
-          <!-- Approved → Matured (PO received) -->
+          <!-- Approved → Convert: Stage-1 forward gate. Opens the PO
+               Capture dialog; on save, creates a Draft PO and flips
+               the quotation to Converted. The legacy "Capture PO &
+               Mature" single-step has been split into Convert here +
+               Submit & Mature on the PO Summary card below. -->
           <button mat-raised-button
-            [style.background]="poReadyToMature ? '#1b5e20' : '#9e9e9e'"
-            style="color:#fff"
-            *ngIf="canApprove && quotationStatus === 'Approved'"
-            (click)="onClickMature()" [disabled]="saving || !poReadyToMature"
-            [matTooltip]="poReadyToMature
-              ? 'Mark as Matured — Purchase Order received'
-              : 'Fill Customer PO No and PO Date in the PO card below to enable'">
-            <mat-icon>{{ poReadyToMature ? 'verified' : 'lock' }}</mat-icon> Matured (PO)
+            style="background:#1b5e20; color:#fff"
+            *ngIf="canConvert && quotationStatus === 'Approved'"
+            (click)="openCapturePoDialog()" [disabled]="saving"
+            matTooltip="Convert: capture the customer PO and move to Stage 2">
+            <mat-icon>play_circle</mat-icon> Convert
           </button>
+
+          <!-- Edit PO action moved into the PO stage card's action
+               cluster (used to live here on the global toolbar). -->
 
           <!-- Approved → Reject -->
           <button mat-stroked-button color="warn"
@@ -170,12 +180,27 @@ export interface VersionEntry {
             <mat-icon>content_copy</mat-icon> Revise
           </button>
 
-          <!-- Reject → Revert to Approved -->
+          <!-- Reject → Reactivate (back to Approved). The legacy
+               /revert-reject endpoint is kept as a backward-compat
+               alias for one release; new clients hit /reactivate. -->
           <button mat-stroked-button
-            *ngIf="canApprove && quotationStatus === 'Reject'"
-            (click)="revertReject()" [disabled]="saving"
-            matTooltip="Revert back to Approved">
-            <mat-icon>undo</mat-icon> Revert to Approved
+            *ngIf="canReactivate && quotationStatus === 'Reject'"
+            (click)="reactivateQuotation()" [disabled]="saving"
+            matTooltip="Reactivate this quotation back to Approved">
+            <mat-icon>refresh</mat-icon> Reactivate
+          </button>
+
+          <!-- Privileged escape valve. Visible on any locked status
+               (Converted / Revised) when the user holds the Quotation-
+               level Unlock permission. Opens the unlock dialog with
+               an audit-trail reason prompt. -->
+          <button mat-stroked-button color="warn"
+            *ngIf="canUnlockEditQuotation
+                   && (quotationStatus === 'Converted' || quotationStatus === 'Revised')"
+            (click)="openUnlockDialog('quotation', 'Quotation')"
+            [disabled]="saving"
+            matTooltip="Privileged: unlock this quotation for in-place edits (audited)">
+            <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
           </button>
 
           <!-- Handover (available on Draft & Approved) -->
@@ -188,22 +213,33 @@ export interface VersionEntry {
         </ng-container>
       </div>
 
-      <!-- Status timeline — rendered for saved quotations only -->
+      <!-- Lifecycle stepper — top horizontal strip across the page,
+           clickable stations switch the active stage's tab group
+           below. Hidden for unsaved quotations (no id yet). -->
       <app-quotation-stepper
         *ngIf="quotationId && !loading"
         [quotationStatus]="quotationStatus"
+        [poStatus]="poStatus"
         [viabilityStatus]="viabilityStatus"
+        [annexureStatus]="annexureStatus"
+        [currentStage]="currentStage"
         [versionNo]="versionNo"
-        [parentQuotId]="parentQuotId">
+        [parentQuotId]="parentQuotId"
+        (stageSelected)="onStageSelected($event)">
       </app-quotation-stepper>
 
       <div *ngIf="loading" class="spinner-container">
         <mat-spinner diameter="48"></mat-spinner>
       </div>
 
-      <mat-card *ngIf="!loading">
+      <!-- Lifecycle Workspace. The outer stepper drives the active
+           stage and we render exactly one stage's tab group at a time
+           below. Constant tabs (Version History and Follow-Ups) are
+           repeated on every stage's group, sourced from the shared
+           ng-templates further down in the markup. -->
+      <mat-card *ngIf="!loading && currentStage === 'quotation'">
         <mat-card-content>
-          <mat-tab-group [(selectedIndex)]="activeTab" animationDuration="200ms">
+          <mat-tab-group [(selectedIndex)]="stageTab.quotation" animationDuration="200ms">
 
             <!-- Tab 1: Quotation Header -->
             <mat-tab label="Quotation Info & PO Details">
@@ -377,14 +413,14 @@ export interface VersionEntry {
               </form>
             </mat-tab>
 
-            <!-- Tab 2: Details (line items) -->
-            <mat-tab label="Working & Viability Sheet" [disabled]="!quotationId">
+            <!-- Tab 2: Working Sheet (line items) -->
+            <mat-tab label="Working Sheet" [disabled]="!quotationId">
               <div class="tab-content">
                 <app-quotation-details
                   *ngIf="quotationId"
                   [quotId]="quotationId"
                   [enqId]="quotForm.get('enqid')?.value"
-                  [readOnly]="isLocked || isMatured"
+                  [readOnly]="workingSheetLocked"
                   [isForDeliveryTerm]="isForDeliveryTerm"
                   [deliveryModeName]="deliveryModeName"
                   (expandedChange)="onLineItemsExpand($event)">
@@ -392,25 +428,7 @@ export interface VersionEntry {
               </div>
             </mat-tab>
 
-            <!-- Tab 3: Annexure (locked until viability is approved) -->
-            <mat-tab [disabled]="!quotationId || !annexureTabUnlocked">
-              <ng-template mat-tab-label>
-                <mat-icon *ngIf="!annexureTabUnlocked" class="tab-lock-icon" matTooltip="Locked until viability is approved">lock</mat-icon>
-                <span>Annexure</span>
-              </ng-template>
-              <div class="tab-content">
-                <app-quotation-annexure
-                  *ngIf="quotationId && annexureTabUnlocked"
-                  [quotId]="quotationId"
-                  [canApprove]="canApprove"
-                  [canApproveAnnexure]="canApproveAnnexure"
-                  [readOnly]="isLocked"
-                  (stageChanged)="onSubStageChanged()">
-                </app-quotation-annexure>
-              </div>
-            </mat-tab>
-
-            <!-- Tab 4: Terms & Conditions -->
+            <!-- Tab 3: Terms & Conditions -->
             <mat-tab label="Terms & Conditions" [disabled]="!quotationId">
               <div class="tab-content">
                 <app-quotation-tnc
@@ -421,23 +439,17 @@ export interface VersionEntry {
               </div>
             </mat-tab>
 
-            <!-- Tab 4: Follow-Ups -->
-            <mat-tab label="Follow-Ups" [disabled]="!quotationId">
-              <div class="tab-content">
-                <app-quotation-followup
-                  *ngIf="quotationId"
-                  [quotId]="quotationId">
-                </app-quotation-followup>
-              </div>
-            </mat-tab>
-
-            <!-- Tab 5: Version History -->
+            <!-- Constant tabs: Version History + Follow-Ups, shared
+                 across every stage's tab group via ng-templates
+                 defined further down in this file. -->
             <mat-tab label="Version History" [disabled]="!quotationId">
               <div class="tab-content">
-                <app-quotation-version-history
-                  *ngIf="quotationId"
-                  [quotId]="quotationId">
-                </app-quotation-version-history>
+                <ng-container *ngTemplateOutlet="versionHistoryTabContent"></ng-container>
+              </div>
+            </mat-tab>
+            <mat-tab label="Follow-Ups" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="followUpsTabContent"></ng-container>
               </div>
             </mat-tab>
 
@@ -445,42 +457,278 @@ export interface VersionEntry {
         </mat-card-content>
       </mat-card>
 
-      <!-- PO Details card: attached to the Quotation Info tab only. -->
-      <mat-card *ngIf="showPoCard() && activeTab === 0" class="po-card">
-        <mat-card-header>
-          <mat-card-title>
-            <mat-icon class="po-title-icon">receipt_long</mat-icon>
-            Purchase Order Details
-          </mat-card-title>
-          <mat-card-subtitle>
-            Provide PO No and PO Date to unlock the <strong>Matured</strong> action. Attachment is optional.
-          </mat-card-subtitle>
-        </mat-card-header>
+      <!-- ===== Stage 2 — Purchase Order ===== -->
+      <mat-card *ngIf="!loading && currentStage === 'po'">
         <mat-card-content>
-          <form [formGroup]="quotForm" class="po-form">
-            <mat-form-field appearance="outline">
-              <mat-label>Customer PO No *</mat-label>
-              <input matInput formControlName="CustomerPONo" />
-            </mat-form-field>
+          <mat-tab-group [(selectedIndex)]="stageTab.po" animationDuration="200ms">
+            <mat-tab label="PO Header" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="poHeaderTabContent"></ng-container>
+              </div>
+            </mat-tab>
+            <!-- Final Working Sheet — the PO-level BOM. Cloned from
+                 QuotDetails on Convert; mutable while PO is Draft;
+                 snapshotted on Submit & Mature. Reuses the same
+                 line-items grid as Stage 1 in PO mode for full
+                 feature parity (cost-head editing, dia/length
+                 pickers, GST mode, TP-cost lookup, dialog add/edit). -->
+            <mat-tab label="Final Working Sheet" [disabled]="!quotationId">
+              <div class="tab-content">
+                <app-quotation-details
+                  *ngIf="quotationId && purchaseOrder"
+                  mode="po"
+                  [quotId]="quotationId"
+                  [readOnly]="!canEditFinalWorkingSheet"
+                  [isForDeliveryTerm]="isForDeliveryTerm"
+                  [deliveryModeName]="deliveryModeName"
+                  (expandedChange)="onLineItemsExpand($event)">
+                </app-quotation-details>
+                <div *ngIf="!purchaseOrder" class="stage-empty">
+                  <mat-icon>build_circle</mat-icon>
+                  <p>The Final Working Sheet appears here once the PO is captured.</p>
+                  <p class="hint">
+                    Click <strong>Convert</strong> on Stage 1 to capture the PO and
+                    auto-clone the quotation's Working Sheet as the editable
+                    Final Working Sheet.
+                  </p>
+                </div>
+              </div>
+            </mat-tab>
+            <mat-tab label="Version History" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="versionHistoryTabContent"></ng-container>
+              </div>
+            </mat-tab>
+            <mat-tab label="Follow-Ups" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="followUpsTabContent"></ng-container>
+              </div>
+            </mat-tab>
+          </mat-tab-group>
+        </mat-card-content>
+      </mat-card>
 
-            <mat-form-field appearance="outline">
-              <mat-label>Customer PO Date *</mat-label>
-              <input matInput [matDatepicker]="poPicker" formControlName="CustomerPODate" />
-              <mat-datepicker-toggle matSuffix [for]="poPicker"></mat-datepicker-toggle>
-              <mat-datepicker #poPicker></mat-datepicker>
-            </mat-form-field>
+      <!-- ===== Stage 3 — Viability ===== -->
+      <mat-card *ngIf="!loading && currentStage === 'viability'">
+        <mat-card-content>
+          <mat-tab-group [(selectedIndex)]="stageTab.viability" animationDuration="200ms">
+            <mat-tab label="Viability Sheet" [disabled]="!quotationId">
+              <div class="tab-content">
+                <app-quotation-viability
+                  *ngIf="quotationId && showViabilityCard()"
+                  [quotId]="quotationId"
+                  [canApprove]="canApprove"
+                  [readOnly]="viabilityReadOnly"
+                  [upstreamPoVersion]="purchaseOrder?.versionNo ?? null"
+                  [resourcing]="resourcing"
+                  (reSource)="reSourceStage('viability')"
+                  (stageChanged)="onSubStageChanged()">
+                </app-quotation-viability>
+                <div *ngIf="!showViabilityCard()" class="stage-empty">
+                  <mat-icon>query_stats</mat-icon>
+                  <p>Viability stage opens once the PO is Submitted &amp; Matured.</p>
+                </div>
+              </div>
+            </mat-tab>
+            <mat-tab label="Version History" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="versionHistoryTabContent"></ng-container>
+              </div>
+            </mat-tab>
+            <mat-tab label="Follow-Ups" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="followUpsTabContent"></ng-container>
+              </div>
+            </mat-tab>
+          </mat-tab-group>
+        </mat-card-content>
+      </mat-card>
 
-            <div class="po-actions">
-              <button mat-raised-button color="primary" type="button"
-                (click)="savePoDetails()" [disabled]="saving || !poDirty || !poEditable">
-                <mat-icon>save</mat-icon> Save PO Details
+      <!-- ===== Stage 4 — Annexure ===== -->
+      <mat-card *ngIf="!loading && currentStage === 'annexure'">
+        <mat-card-content>
+          <mat-tab-group [(selectedIndex)]="stageTab.annexure" animationDuration="200ms">
+            <mat-tab [disabled]="!quotationId">
+              <ng-template mat-tab-label>
+                <mat-icon *ngIf="!annexureTabUnlocked" class="tab-lock-icon"
+                          matTooltip="Locked until viability is approved">lock</mat-icon>
+                <span>Annexure</span>
+              </ng-template>
+              <div class="tab-content">
+                <app-quotation-annexure
+                  *ngIf="quotationId && annexureTabUnlocked"
+                  [quotId]="quotationId"
+                  [canApprove]="canApprove"
+                  [canApproveAnnexure]="canApproveAnnexure"
+                  [readOnly]="isLocked"
+                  [upstreamQuotationVersion]="versionNo || 1"
+                  [upstreamPoVersion]="purchaseOrder?.versionNo ?? null"
+                  [upstreamViabilityVersion]="upstreamViabilityVersion"
+                  [resourcing]="resourcing"
+                  (reSource)="reSourceStage('annexure')"
+                  (stageChanged)="onSubStageChanged()">
+                </app-quotation-annexure>
+                <div *ngIf="!annexureTabUnlocked" class="stage-empty">
+                  <mat-icon>description</mat-icon>
+                  <p>Annexure stage opens once the Viability Sheet is approved.</p>
+                </div>
+              </div>
+            </mat-tab>
+            <mat-tab label="Version History" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="versionHistoryTabContent"></ng-container>
+              </div>
+            </mat-tab>
+            <mat-tab label="Follow-Ups" [disabled]="!quotationId">
+              <div class="tab-content">
+                <ng-container *ngTemplateOutlet="followUpsTabContent"></ng-container>
+              </div>
+            </mat-tab>
+          </mat-tab-group>
+        </mat-card-content>
+      </mat-card>
+
+      <!-- ===== Shared tab content templates (constant across stages) ===== -->
+      <ng-template #versionHistoryTabContent>
+        <app-quotation-version-history
+          *ngIf="quotationId"
+          [quotId]="quotationId">
+        </app-quotation-version-history>
+      </ng-template>
+
+      <ng-template #followUpsTabContent>
+        <app-quotation-followup
+          *ngIf="quotationId"
+          [quotId]="quotationId">
+        </app-quotation-followup>
+      </ng-template>
+
+      <!-- ===== Stage 2 PO Header tab content ===== -->
+      <ng-template #poHeaderTabContent>
+        <!-- PO has been captured. Renders the same accent-strip Summary
+             card you saw before, just hosted inside Stage 2's tab now. -->
+        <mat-card *ngIf="purchaseOrder" class="stage-card">
+          <div class="stage-card-head">
+            <div class="stage-card-head-left">
+              <mat-icon class="stage-card-head-icon">receipt_long</mat-icon>
+              <div class="stage-card-head-text">
+                <div class="stage-card-head-title">
+                  Purchase Order
+                  <app-version-selector
+                    [quotId]="quotationId!"
+                    stage="purchase-order"
+                    [headVersion]="purchaseOrder.versionNo || 1"
+                    [canRestore]="canUnlockEditPO"
+                    (restored)="loadQuotation(quotationId!)">
+                  </app-version-selector>
+                </div>
+                <div class="stage-card-head-meta">
+                  <span class="po-no">{{ purchaseOrder.poNo }}</span>
+                  <span class="po-dot">·</span>
+                  <span>dated {{ purchaseOrder.poDate | date:'dd-MM-yyyy' }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="stage-card-head-actions">
+              <span class="stage-status-chip"
+                    [class.is-approved]="purchaseOrder.status === 'Submitted'"
+                    [class.is-warn]="purchaseOrder.status === 'Rejected'">
+                {{ purchaseOrder.status || 'Draft' }}
+              </span>
+
+              <!-- Edit PO header — only meaningful while the PO is
+                   Draft (the backend rejects edits on Submitted/Rejected
+                   rows). Lives here on the PO stage card now, not on
+                   the global toolbar. -->
+              <button mat-stroked-button
+                *ngIf="canConvert && purchaseOrder.status === 'Draft'"
+                (click)="openEditPoDialog()" [disabled]="saving"
+                matTooltip="Edit the captured PO header (customer / contact / billing / consignee)">
+                <mat-icon>edit_note</mat-icon> Edit PO
               </button>
-              <span *ngIf="poDirty" class="po-unsaved">Unsaved changes</span>
-              <span *ngIf="!poEditable && !isLocked" class="po-frozen">
-                <mat-icon class="po-frozen-icon">lock</mat-icon> Locked — quotation has progressed past Matured
+
+              <button mat-raised-button color="primary"
+                *ngIf="canSubmitPO && purchaseOrder.status === 'Draft'"
+                (click)="submitPo()" [disabled]="saving"
+                matTooltip="Submit & Mature: lock the PO and open the Viability stage">
+                <mat-icon>verified</mat-icon> Submit &amp; Mature
+              </button>
+
+              <!-- Reject PO + Unlock-and-Edit PO disappear once the
+                   viability sheet has been approved. The downstream
+                   chain (viability + annexure) was generated against
+                   the current PO; mutating it after that point would
+                   silently invalidate those artefacts. -->
+              <button mat-stroked-button color="warn"
+                *ngIf="canRejectPO && purchaseOrder.status === 'Submitted' && !viabilityApproved"
+                (click)="rejectPo()" [disabled]="saving"
+                matTooltip="Reject PO and un-Convert the quotation back to Approved">
+                <mat-icon>cancel</mat-icon> Reject PO
+              </button>
+
+              <button mat-stroked-button color="warn"
+                *ngIf="canUnlockEditPO && purchaseOrder.status === 'Submitted' && !viabilityApproved"
+                (click)="openUnlockDialog('purchase-order', 'Purchase Order')"
+                [disabled]="saving"
+                matTooltip="Privileged: unlock this submitted PO for in-place edits (audited)">
+                <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
+              </button>
+
+              <span *ngIf="viabilityApproved" class="stage-status-chip is-locked"
+                    matTooltip="Locked because the Viability Sheet has been approved. Re-source from upstream to revisit.">
+                <mat-icon>lock</mat-icon> Locked
               </span>
             </div>
-          </form>
+          </div>
+
+          <app-stale-banner
+            [stale]="isPoStaleVsQuotation()"
+            stageLabel="Purchase Order"
+            title="PO is stale relative to the quotation"
+            [message]="poStaleMessage()"
+            [canResource]="canUnlockEditPO"
+            [busy]="resourcing"
+            (resource)="reSourceStage('purchase-order')">
+          </app-stale-banner>
+
+          <div class="po-grid">
+            <div class="po-field">
+              <label>Customer</label>
+              <span>{{ purchaseOrder.customerName || '—' }}</span>
+            </div>
+            <div class="po-field">
+              <label>Contact Person</label>
+              <span>{{ purchaseOrder.contactPersonName || '—' }}</span>
+            </div>
+            <div class="po-field po-addr">
+              <label>
+                <mat-icon class="po-field-icon">request_quote</mat-icon>
+                Billing Address
+              </label>
+              <span>{{
+                purchaseOrder.billingAddressManual
+                  || purchaseOrder.billingSiteAddress
+                  || '—'
+              }}</span>
+            </div>
+            <div class="po-field po-addr">
+              <label>
+                <mat-icon class="po-field-icon">local_shipping</mat-icon>
+                Consignee Address
+              </label>
+              <span>{{
+                purchaseOrder.consigneeAddressManual
+                  || purchaseOrder.consigneeSiteAddress
+                  || '—'
+              }}</span>
+            </div>
+            <div class="po-field po-remarks" *ngIf="purchaseOrder.remarks">
+              <label>Remarks</label>
+              <span>{{ purchaseOrder.remarks }}</span>
+            </div>
+          </div>
+
+          <mat-divider class="po-divider"></mat-divider>
 
           <app-asset-upload
             *ngIf="quotationId"
@@ -492,22 +740,18 @@ export interface VersionEntry {
             [maxSizeMb]="20"
             [compressImages]="true"
             [multiple]="false"
-            [disabled]="!poEditable"
+            [disabled]="purchaseOrder.status !== 'Draft'"
             hintText="Allowed: PDF, JPG, PNG · max 20 MB · images auto-compressed">
           </app-asset-upload>
-        </mat-card-content>
-      </mat-card>
+        </mat-card>
 
-      <!-- Viability Sheet card: attached to the Line Items tab only.
-           Becomes read-only once we move past viability approval.
-           Explicit quotationId check first so Angular narrows the type for quotId binding. -->
-      <app-quotation-viability
-        *ngIf="quotationId && showViabilityCard() && activeTab === 1"
-        [quotId]="quotationId"
-        [canApprove]="canApprove"
-        [readOnly]="viabilityReadOnly"
-        (stageChanged)="onSubStageChanged()">
-      </app-quotation-viability>
+        <!-- No PO captured yet — show empty-state + invite to Convert. -->
+        <div *ngIf="!purchaseOrder" class="stage-empty">
+          <mat-icon>receipt_long</mat-icon>
+          <p>No purchase order captured yet.</p>
+          <p class="hint">Use the <strong>Convert</strong> button on Stage 1 to capture the customer PO and open this stage.</p>
+        </div>
+      </ng-template>
     </div>
   `,
   styles: [`
@@ -600,49 +844,89 @@ export interface VersionEntry {
       }
     }
 
-    /* PO Details card (appears after approval) */
-    .po-card { margin-top: 20px; }
-    .po-card mat-card-title {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 18px;
+    /* Stage-level empty / locked panel — used inside any stage's
+       tab content when the underlying entity isn't ready (e.g. PO
+       not yet captured, viability locked until PO is Submitted,
+       annexure locked until viability is Approved). */
+    .stage-empty {
+      text-align: center;
+      padding: 56px 24px;
+      color: var(--snm-text-muted);
     }
-    .po-title-icon { color: var(--snm-accent-dark, #3a6bb5); }
-    .po-form {
-      display: grid;
-      grid-template-columns: 1fr 1fr auto;
-      gap: 12px;
-      align-items: start;
-      margin: 16px 0 8px;
+    .stage-empty mat-icon {
+      font-size: 48px; width: 48px; height: 48px; opacity: 0.55;
+      margin-bottom: 12px;
     }
-    .po-form mat-form-field { width: 100%; }
-    .po-actions {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding-top: 4px;
-    }
-    .po-unsaved {
+    .stage-empty p { margin: 4px 0; font-size: 14px; }
+    .stage-empty .hint {
       font-size: 12px;
-      color: #e65100;
-      font-style: italic;
+      color: var(--snm-text-faint);
+      max-width: 480px;
+      margin: 6px auto 0;
+      line-height: 1.5;
     }
-    .po-frozen {
+
+    /* PO Summary card body. Shell chrome (head strip, status chip,
+       lock chip) lives in the shared stage-card classes in
+       styles.scss; only the body grid and address blocks are
+       component-specific. */
+    .po-no {
+      font-weight: 600;
+      color: var(--snm-accent-dark, #3a6bb5);
+      letter-spacing: 0.3px;
+    }
+    .po-dot { margin: 0 6px; opacity: 0.5; }
+    .po-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px 24px;
+      padding: 18px 22px 6px;
+    }
+    .po-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .po-field label {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      font-size: 12px;
-      color: var(--snm-text-muted);
-      font-style: italic;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--snm-text-muted, rgba(0,0,0,0.55));
     }
-    .po-frozen-icon {
+    .po-field-icon {
+      font-size: 14px; width: 14px; height: 14px;
+      color: var(--snm-accent, #5b85c2);
+    }
+    .po-field span {
       font-size: 14px;
-      width: 14px;
-      height: 14px;
+      color: var(--snm-text-primary, #1a1a1a);
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .po-addr span {
+      padding: 8px 12px;
+      background: rgba(58, 107, 181, 0.04);
+      border-left: 3px solid var(--snm-accent, #5b85c2);
+      border-radius: 4px;
+    }
+    .po-remarks {
+      grid-column: 1 / -1;
+    }
+    .po-divider {
+      margin: 14px 0 0;
+    }
+    .po-summary-card app-asset-upload {
+      display: block;
+      padding: 18px 22px 18px;
     }
     @media (max-width: 768px) {
-      .po-form { grid-template-columns: 1fr; }
+      .po-grid { grid-template-columns: 1fr; gap: 14px; padding: 16px; }
+      .po-summary-card app-asset-upload { padding: 16px; }
     }
 
     /* Lock icon inside a disabled tab label */
@@ -661,7 +945,34 @@ export class QuotationFormComponent implements OnInit {
   isEditMode = false;
   quotationId: number | null = null;
   quotationStatus = 'Draft';
-  activeTab = 0;
+  /** Currently-viewed lifecycle stage. Driven by the top stepper.
+   *  Each stage owns its own ``mat-tab-group`` below; only the matching
+   *  group is rendered. Constant tabs (Version History + Follow-Ups)
+   *  are repeated at the right end of every group.
+   *
+   *  Default: 'quotation'. The stepper auto-selects the latest reached
+   *  stage on first quotation load via ``computeDefaultStage()``. */
+  currentStage: 'quotation' | 'po' | 'viability' | 'annexure' = 'quotation';
+  /** Per-stage tab index. Each stage gets its own selectedIndex so
+   *  switching back to a stage restores the user's last sub-view. */
+  stageTab: { quotation: number; po: number; viability: number; annexure: number } = {
+    quotation: 0, po: 0, viability: 0, annexure: 0,
+  };
+  /** Lifecycle status snapshot — drives the stepper's per-stage
+   *  sub-text and reached state. Refreshed in ``loadQuotation``. */
+  poStatus: 'Draft' | 'Submitted' | 'Rejected' | null = null;
+  annexureStatus: 'Draft' | 'Approved' | null = null;
+  /** Current viability head's versionNo (Phase 3 — Annexure compares
+   *  this to its stamped ``sourcedFromViabilityVersion`` to surface a
+   *  stale banner). Hydrated by ``refreshViabilityStatus``. */
+  upstreamViabilityVersion: number | null = null;
+  /** Used by ``loadQuotation`` to auto-pick the latest reached stage
+   *  exactly once on first quotation load. Subsequent reloads (after
+   *  Convert, Submit, etc.) preserve whatever stage the user is on. */
+  private firstLoad = true;
+  /** True while a Re-source request is in flight (Phase 3). The
+   *  StaleBanner reads this for its inline spinner / disabled state. */
+  resourcing = false;
   loading = false;
   saving = false;
   lineItemsExpanded = false;
@@ -677,6 +988,13 @@ export class QuotationFormComponent implements OnInit {
   canApprove = false;
   canRevise = false;
   canTransferOwnership = false;
+  // Phase 1 lifecycle flags. Read from menuService on init.
+  canConvert = false;
+  canReactivate = false;
+  canSubmitPO = false;
+  canRejectPO = false;
+  canUnlockEditQuotation = false;
+  canUnlockEditPO = false;
   /** Granted only to the Commercial HOD role. Gates the annexure
    *  approve button AND lets the holder edit annexures even after
    *  they're approved. */
@@ -684,6 +1002,16 @@ export class QuotationFormComponent implements OnInit {
   currentOwnerUserId: number | null = null;
   isLocked = false;
   isMatured = false;
+
+  /** Captured customer PO row (1:1 with the quotation). Null until the
+   *  user runs the Capture-PO dialog; populated from the quotation
+   *  ``purchase_order`` field on every reload. The form template's PO
+   *  Summary card binds to this directly. The backend response carries
+   *  pre-resolved labels (``customerName``, ``contactPersonName``,
+   *  ``billingSiteAddress``, ``consigneeSiteAddress``) so this card
+   *  doesn't need a follow-up site lookup — even when the address is
+   *  an ad-hoc site that isn't in the regular picker list. */
+  purchaseOrder: any | null = null;
 
   // Viability + versioning surface state — consumed by <app-quotation-stepper>
   viabilityStatus: 'Draft' | 'Approved' | null = null;
@@ -711,12 +1039,22 @@ export class QuotationFormComponent implements OnInit {
     return mode?.deliveryMode || '';
   }
 
-  /** Annexure tab opens once viability is approved (or further down the chain). */
+  /** Annexure tab opens once viability is approved. Reads the
+   *  per-stage status directly (Phase 4) — the legacy
+   *  ViabilityApproved / AnnexureGenerated / AnnexureApproved
+   *  strings on QuotSummary are gone. */
   get annexureTabUnlocked(): boolean {
-    return this.viabilityStatus === 'Approved'
-      || this.quotationStatus === 'ViabilityApproved'
-      || this.quotationStatus === 'AnnexureGenerated'
-      || this.quotationStatus === 'AnnexureApproved';
+    return this.viabilityStatus === 'Approved' || !!this.annexureStatus;
+  }
+
+  /** Working-sheet (line items) is locked once the quotation is
+   *  Converted. After Convert the line items are immutable on the
+   *  quotation side — any qty / cost-head changes happen on the
+   *  PO Working Sheet (Stage 2). ``isLocked`` (Revised) keeps its
+   *  pre-existing lock. */
+  get workingSheetLocked(): boolean {
+    if (this.isLocked) return true;
+    return this.quotationStatus === 'Converted';
   }
 
   // Local search for contact dropdown (loaded once per customer, small set)
@@ -755,6 +1093,21 @@ export class QuotationFormComponent implements OnInit {
       || this.menuService.hasPermission('Quotations', 'canEdit');
     this.canTransferOwnership = this.menuService.hasPermission('Quotations', 'canTransferOwnership');
     this.canApproveAnnexure = this.menuService.hasPermission('Quotations', 'canApproveAnnexure');
+    // Phase 1 lifecycle flags. Convert/Reactivate/SubmitPO/RejectPO
+    // fall back to canApprove for legacy roles that haven't been
+    // granted the new flags yet — keeps existing HOD users unblocked
+    // until the role-menu mapping is updated.
+    this.canConvert = this.menuService.hasPermission('Quotations', 'canConvert')
+      || this.menuService.hasPermission('Quotations', 'canApprove');
+    this.canReactivate = this.menuService.hasPermission('Quotations', 'canReactivate')
+      || this.menuService.hasPermission('Quotations', 'canApprove');
+    this.canSubmitPO = this.menuService.hasPermission('Quotations', 'canSubmitPO')
+      || this.menuService.hasPermission('Quotations', 'canEdit');
+    this.canRejectPO = this.menuService.hasPermission('Quotations', 'canRejectPO')
+      || this.menuService.hasPermission('Quotations', 'canApprove');
+    // Unlock-and-Edit has NO legacy fallback — privileged users only.
+    this.canUnlockEditQuotation = this.menuService.hasPermission('Quotations', 'canUnlockEditQuotation');
+    this.canUnlockEditPO = this.menuService.hasPermission('Quotations', 'canUnlockEditPO');
     this.buildForm();
     this.loadDropdowns();
 
@@ -779,8 +1132,6 @@ export class QuotationFormComponent implements OnInit {
       deliveryModeId: [null, this.forModeValidator()],
       refQuotNo: [''],
       remarks: [''],
-      CustomerPONo: [''],
-      CustomerPODate: [null],
       codeUserId: [null],
     });
 
@@ -883,8 +1234,25 @@ export class QuotationFormComponent implements OnInit {
         this.quotForm.patchValue({
           ...data,
           quotDate: data.quotDate ? new Date(data.quotDate) : null,
-          CustomerPODate: data.CustomerPODate ? new Date(data.CustomerPODate) : null,
         });
+        // PO header lives on a separate entity now; cache the row so the
+        // PO Summary card and the Edit-PO dialog can read from it. The
+        // backend response carries pre-resolved labels for customer /
+        // contact / billing / consignee, so the card binds directly
+        // without any further client-side lookup.
+        this.purchaseOrder = data.purchase_order || null;
+        // Stepper sub-states. PO comes from the nested entity;
+        // viability + annexure each fetch their own per-stage status
+        // via dedicated endpoints (Phase 4 — no more deriving from
+        // the now-collapsed QuotSummary.status).
+        this.poStatus = (data.purchase_order?.status as any) || null;
+        this.refreshAnnexureStatus();
+        // Auto-pick the latest reached stage on first load so the user
+        // lands on whichever stage they were last working on.
+        if (this.firstLoad) {
+          this.currentStage = this.computeDefaultStage();
+          this.firstLoad = false;
+        }
         // Lock customer if linked to an enquiry. The ServerSearchSelect auto-resolves
         // the enqid → label via its /search?ids=X lookup — no manual preload needed.
         if (data.enqid) {
@@ -894,23 +1262,19 @@ export class QuotationFormComponent implements OnInit {
           this.loadContactsAndSites(data.customerId);
         }
         // Revised = fully locked.
-        // Matured = only PO fields editable.
-        // Anything past Matured (Viability/Annexure stages) = fully locked too —
-        // the order details and PO are frozen, viability/annexure live in their
-        // own components/tabs.
+        // Matured / past-Matured = order body locked (PO + viability +
+        // annexure live in their own dialogs/tabs and have their own
+        // edit gates). The form has nothing left for the user to
+        // edit at that point, so we just disable it wholesale.
+        // Phase 4: locked-status set collapses to just Revised +
+        // Converted. Past-Convert lifecycle position lives on the
+        // per-stage entities now, not back on QuotSummary.status.
+        // ``isMatured`` retained as a legacy alias for any external
+        // CSS / template hooks that haven't been migrated yet.
         this.isLocked = data.status === 'Revised';
-        this.isMatured = data.status === 'Matured';
-        const pastMatured = [
-          'ViabilityGenerated', 'ViabilityApproved',
-          'AnnexureGenerated', 'AnnexureApproved',
-        ].includes(data.status);
-        if (this.isLocked || pastMatured) {
+        this.isMatured = data.status === 'Converted';
+        if (this.isLocked || data.status === 'Converted') {
           this.quotForm.disable();
-        } else if (this.isMatured) {
-          // Disable everything, then re-enable PO fields only
-          this.quotForm.disable();
-          this.quotForm.get('CustomerPONo')?.enable();
-          this.quotForm.get('CustomerPODate')?.enable();
         }
         this.loading = false;
       },
@@ -990,7 +1354,6 @@ export class QuotationFormComponent implements OnInit {
     const payload = {
       ...val,
       quotDate: val.quotDate ? this.formatDate(val.quotDate) : null,
-      CustomerPODate: val.CustomerPODate ? this.formatDate(val.CustomerPODate) : null,
     };
 
     const request$ = this.isEditMode && this.quotationId
@@ -1007,7 +1370,10 @@ export class QuotationFormComponent implements OnInit {
         } else {
           this.quotationId = savedId;
           this.isEditMode = true;
-          this.activeTab = 1;
+          // Jump to the Working Sheet sub-tab inside Stage 1 so the
+          // user lands on line-item entry right after the header save.
+          this.currentStage = 'quotation';
+          this.stageTab.quotation = 1;
         }
       },
       error: () => {
@@ -1102,155 +1468,121 @@ export class QuotationFormComponent implements OnInit {
    */
   private refreshViabilityStatus(): void {
     if (!this.quotationId) return;
-    if (this.quotationStatus !== 'Matured') {
+    // Viability is only relevant from the Convert gate onwards. Skip
+    // the network call for earlier statuses to avoid noise. Recognise
+    // both the new ``Converted`` and any legacy "matured-or-later"
+    // strings still in the data.
+    const viabilityRelevant =
+      this.poStatus === 'Submitted'
+      || this.quotationStatus === 'Converted';
+    if (!viabilityRelevant) {
       this.viabilityStatus = null;
+      this.upstreamViabilityVersion = null;
       return;
     }
     this.apiService.get<any>(`/quotations/${this.quotationId}/viability`).subscribe({
       next: (res) => {
         const v = res?.viability;
         this.viabilityStatus = v ? (v.status === 'Approved' ? 'Approved' : 'Draft') : null;
+        this.upstreamViabilityVersion = v?.versionNo ?? null;
       },
-      error: () => { this.viabilityStatus = null; },
+      error: () => {
+        this.viabilityStatus = null;
+        this.upstreamViabilityVersion = null;
+      },
     });
   }
 
-  /** PO card is relevant from the moment the quotation is Approved and stays
-   * visible through every downstream stage so the user can reference the
-   * order details while working on Viability or Annexure. */
-  showPoCard(): boolean {
-    return !!this.quotationId && [
-      'Approved', 'Matured',
-      'ViabilityGenerated', 'ViabilityApproved',
-      'AnnexureGenerated', 'AnnexureApproved',
-    ].includes(this.quotationStatus);
-  }
-
-  /** Viability card only becomes available once the quotation is Matured.
-   * Stays visible through the downstream stages (ViabilityGenerated/Approved,
-   * AnnexureGenerated/Approved) so the user can reference it while working
-   * on annexure. Becomes read-only once we move past viability approval. */
+  /** Viability card opens when the PO is Submitted (Phase 1 model)
+   *  OR the quotation is in any legacy "matured-or-later" status
+   *  (rows still mid-migration). Stays visible through downstream
+   *  stages so the user can reference it while working on annexure. */
   showViabilityCard(): boolean {
-    return !!this.quotationId && [
-      'Matured',
-      'ViabilityGenerated', 'ViabilityApproved',
-      'AnnexureGenerated', 'AnnexureApproved',
-    ].includes(this.quotationStatus);
+    if (!this.quotationId) return false;
+    return this.poStatus === 'Submitted';
   }
 
-  /** PO fields are only editable in Approved / Matured. Past Matured we
-   * freeze them — viability / annexure stages shouldn't mutate the order. */
-  get poEditable(): boolean {
-    return !this.isLocked
-      && (this.quotationStatus === 'Approved' || this.quotationStatus === 'Matured');
+  /** Final Working Sheet is editable only while the PO is Draft.
+   *  Submit & Mature snapshots the rows and the inline grid flips
+   *  read-only; Unlock-and-Edit (Phase 2) is the privileged path
+   *  back into edit mode. */
+  get canEditFinalWorkingSheet(): boolean {
+    return this.poStatus === 'Draft';
   }
 
-  /** Viability stops being editable once we've moved into the annexure stages. */
+  /** True once the viability sheet has been approved. Drives the
+   *  downstream lock that hides Reject PO / Unlock-and-Edit PO /
+   *  Unlock-and-Edit Viability — mutating either stage after the
+   *  viability is signed off would silently invalidate the chain.
+   *  Re-source from upstream is still available for users who hold
+   *  the matching Unlock-and-Edit permission. */
+  get viabilityApproved(): boolean {
+    return this.viabilityStatus === 'Approved';
+  }
+
+  /** Viability stops being editable once an annexure exists for it
+   *  (Phase 4 — read the per-stage status directly instead of the
+   *  collapsed legacy strings). */
   get viabilityReadOnly(): boolean {
-    return this.isLocked
-      || this.quotationStatus === 'AnnexureGenerated'
-      || this.quotationStatus === 'AnnexureApproved';
+    return this.isLocked || !!this.annexureStatus;
   }
 
-  /** Mature action requires both PO No and PO Date to be filled and saved. */
-  get poReadyToMature(): boolean {
-    const no = (this.quotForm.get('CustomerPONo')?.value || '').toString().trim();
-    const date = this.quotForm.get('CustomerPODate')?.value;
-    const dirty = this.poDirty;
-    return !!no && !!date && !dirty;
-  }
-
-  /** True when either PO field has unsaved edits — used to drive the Save button and the save-before-mature prompt. */
-  get poDirty(): boolean {
-    return !!this.quotForm.get('CustomerPONo')?.dirty
-      || !!this.quotForm.get('CustomerPODate')?.dirty;
-  }
-
-  /** Persists PO No + PO Date via the existing update path. Stays on current tab. */
-  savePoDetails(): void {
+  /** Open the PO-capture dialog (Approved → Matured). The dialog owns
+   *  the PUT /mature call; on success we just refresh the form so the
+   *  status badge, stepper, PO summary card, and toolbar all reflect
+   *  the new state. */
+  openCapturePoDialog(): void {
     if (!this.quotationId) return;
-    const poNo = this.quotForm.get('CustomerPONo');
-    const poDate = this.quotForm.get('CustomerPODate');
-    if (!poNo?.value || !poDate?.value) {
-      this.notificationService.error('Customer PO No and PO Date are required.');
-      return;
-    }
-    this.saving = true;
-    const payload = {
-      CustomerPONo: poNo.value,
-      CustomerPODate: this.formatDate(poDate.value),
-    };
-    this.apiService.put(`/quotations/${this.quotationId}`, payload).subscribe({
-      next: () => {
-        this.saving = false;
-        poNo.markAsPristine();
-        poDate.markAsPristine();
-        this.notificationService.success('PO details saved.');
-      },
-      error: (e: any) => {
-        this.saving = false;
-        this.notificationService.error(e?.error?.detail || 'Failed to save PO details.');
-      },
-    });
-  }
-
-  /** Entry point for the Mature button. Prompts to save first if PO fields are dirty. */
-  onClickMature(): void {
-    if (!this.quotationId) return;
-    if (this.poDirty) {
-      const ref = this.dialog.open(ConfirmDialogComponent, {
-        data: {
-          title: 'Unsaved PO Details',
-          message: 'You have unsaved changes to the PO fields. Save them before marking this quotation as Matured?',
-          confirmText: 'Save & Mature',
-          cancelText: 'Cancel',
-          confirmColor: 'primary',
+    const ref = this.dialog.open(QuotationPoDialogComponent, {
+      data: {
+        quotationId: this.quotationId,
+        quotNo: this.quotForm.get('quotNo')?.value || null,
+        mode: 'capture',
+        defaults: {
+          customerId: this.quotForm.get('customerId')?.value ?? null,
+          customerContactId: this.quotForm.get('customerContactId')?.value ?? null,
+          siteId: this.quotForm.get('siteId')?.value ?? null,
         },
-      });
-      ref.afterClosed().subscribe(ok => {
-        if (!ok) return;
-        this.savePoDetailsThenMature();
-      });
-    } else {
-      this.matureQuotation();
-    }
-  }
-
-  private savePoDetailsThenMature(): void {
-    if (!this.quotationId) return;
-    const poNo = this.quotForm.get('CustomerPONo');
-    const poDate = this.quotForm.get('CustomerPODate');
-    this.saving = true;
-    const payload = {
-      CustomerPONo: poNo?.value,
-      CustomerPODate: poDate?.value ? this.formatDate(poDate.value) : null,
-    };
-    this.apiService.put(`/quotations/${this.quotationId}`, payload).subscribe({
-      next: () => {
-        poNo?.markAsPristine();
-        poDate?.markAsPristine();
-        this.matureQuotation();
       },
-      error: (e: any) => {
-        this.saving = false;
-        this.notificationService.error(e?.error?.detail || 'Failed to save PO details.');
-      },
+      width: '820px',
+      maxWidth: '95vw',
+      disableClose: true,
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.loadQuotation(this.quotationId!);
     });
   }
 
-  matureQuotation(): void {
-    if (!this.quotationId) return;
-    this.saving = true;
-    this.apiService.put(`/quotations/${this.quotationId}/mature`, {}).subscribe({
-      next: () => {
-        this.saving = false;
-        this.notificationService.success('Quotation matured (PO received).');
-        this.loadQuotation(this.quotationId!);
+  /** Open the PO-edit dialog (Matured only). Server-side gate returns
+   *  409 once viability has begun — surfaced as a toast inside the
+   *  dialog. */
+  openEditPoDialog(): void {
+    if (!this.quotationId || !this.purchaseOrder) return;
+    const po = this.purchaseOrder;
+    const ref = this.dialog.open(QuotationPoDialogComponent, {
+      data: {
+        quotationId: this.quotationId,
+        quotNo: this.quotForm.get('quotNo')?.value || null,
+        mode: 'edit',
+        defaults: {
+          customerId: po.customerId,
+          customerContactId: po.customerContactId,
+          siteId: null,
+          poNo: po.poNo,
+          poDate: po.poDate,
+          billingSiteId: po.billingSiteId,
+          billingAddressManual: po.billingAddressManual,
+          consigneeSiteId: po.consigneeSiteId,
+          consigneeAddressManual: po.consigneeAddressManual,
+          remarks: po.remarks,
+        },
       },
-      error: (e) => {
-        this.saving = false;
-        this.notificationService.error(e?.error?.detail || 'Failed to mature.');
-      },
+      width: '820px',
+      maxWidth: '95vw',
+      disableClose: true,
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.loadQuotation(this.quotationId!);
     });
   }
 
@@ -1265,14 +1597,197 @@ export class QuotationFormComponent implements OnInit {
     });
   }
 
-  revertReject(): void {
+  /** Stage-2 forward gate: Submit & Mature. Flips the PO from Draft
+   *  to Submitted; the quotation stays at Converted. After success
+   *  the workspace auto-navigates to Stage 3 (Viability) so the
+   *  user can immediately Generate Viability — that's the next gate
+   *  in the lifecycle and there's no reason to make them click the
+   *  stepper. */
+  submitPo(): void {
     if (!this.quotationId) return;
-    this.apiService.put(`/quotations/${this.quotationId}/revert-reject`, {}).subscribe({
+    const ref = this.dialog.open(ConfirmDialogComponent, {
+      data: {
+        title: 'Submit & Mature this PO?',
+        message:
+          'Once submitted, the Final Working Sheet is snapshotted, the PO is ' +
+          'locked, and the Viability stage opens for sheet generation.',
+        confirmText: 'Submit & Mature',
+        confirmColor: 'primary',
+        cancelText: 'Cancel',
+      },
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (!ok) return;
+      this.saving = true;
+      this.apiService.put(
+        `/quotations/${this.quotationId}/purchase-order/submit`, {},
+      ).subscribe({
+        next: () => {
+          this.saving = false;
+          this.notificationService.success('PO submitted & matured. Viability stage is ready.');
+          // Jump the user to Stage 3 so generation is one click away.
+          this.currentStage = 'viability';
+          this.stageTab.viability = 0;
+          this.loadQuotation(this.quotationId!);
+        },
+        error: (e) => {
+          this.saving = false;
+          this.notificationService.error(e?.error?.detail || 'Failed to submit PO.');
+        },
+      });
+    });
+  }
+
+  /** Stage-2 backward escape: Reject PO. Un-Converts the quotation
+   *  back to Approved so the user can Revise / re-Convert cleanly. */
+  rejectPo(): void {
+    if (!this.quotationId) return;
+    const ref = this.dialog.open(ConfirmDialogComponent, {
+      data: {
+        title: 'Reject this PO?',
+        message:
+          'The quotation will revert to Approved so you can Revise or ' +
+          're-Convert. The current PO row will be archived.',
+        confirmText: 'Reject PO',
+        confirmColor: 'warn',
+        cancelText: 'Cancel',
+      },
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (!ok) return;
+      this.saving = true;
+      this.apiService.put(
+        `/quotations/${this.quotationId}/purchase-order/reject`, {},
+      ).subscribe({
+        next: () => {
+          this.saving = false;
+          this.notificationService.success('PO rejected. Quotation back to Approved.');
+          // Send the user back to Stage 1 — that's where the next
+          // action (Revise / re-Convert) lives.
+          this.currentStage = 'quotation';
+          this.loadQuotation(this.quotationId!);
+        },
+        error: (e) => {
+          this.saving = false;
+          this.notificationService.error(e?.error?.detail || 'Failed to reject PO.');
+        },
+      });
+    });
+  }
+
+  /** Stepper click handler — flips the active stage. Called when the
+   *  user clicks a station on <app-quotation-stepper>. */
+  onStageSelected(stage: 'quotation' | 'po' | 'viability' | 'annexure'): void {
+    this.currentStage = stage;
+  }
+
+  // ----- Phase 3 staleness checks + Re-source dispatcher -----
+
+  /** PO is stale when its stamped quotation version is older than the
+   *  quotation's current versionNo (i.e. someone Revised the quotation
+   *  after the PO was Converted). */
+  isPoStaleVsQuotation(): boolean {
+    if (!this.purchaseOrder) return false;
+    const stamp = this.purchaseOrder.sourcedFromQuotationVersion;
+    const head = this.versionNo || 1;
+    return stamp != null && stamp < head;
+  }
+
+  poStaleMessage(): string {
+    const stamp = this.purchaseOrder?.sourcedFromQuotationVersion ?? '?';
+    const head = this.versionNo || 1;
+    return (
+      `Sourced from quotation v${stamp}; current quotation head is v${head}. ` +
+      `Click Re-source to re-clone the Final Working Sheet from the latest quotation.`
+    );
+  }
+
+  /** Single dispatcher for the Re-source button on every stage. Posts
+   *  to ``/quotations/{id}/{stage}/re-source`` and reloads the form
+   *  on success. */
+  reSourceStage(stage: 'purchase-order' | 'viability' | 'annexure'): void {
+    if (!this.quotationId) return;
+    this.resourcing = true;
+    this.apiService.post<any>(
+      `/quotations/${this.quotationId}/${stage}/re-source`, {},
+    ).subscribe({
       next: () => {
-        this.notificationService.success('Quotation reverted to Approved.');
+        this.resourcing = false;
+        this.notificationService.success('Re-sourced from latest upstream.');
         this.loadQuotation(this.quotationId!);
       },
-      error: (e) => this.notificationService.error(e?.error?.detail || 'Failed to revert.'),
+      error: (err) => {
+        this.resourcing = false;
+        this.notificationService.error(err?.error?.detail || 'Re-source failed.');
+      },
+    });
+  }
+
+  /** Coarse derivation of annexure status from the (legacy) flat
+   *  ``QuotSummary.status``. Once the form pulls the dedicated
+   *  ``/quotations/{id}/annexure`` endpoint into its load chain we'll
+   *  read the per-stage status directly via /quotations/{id}/annexure. */
+  private refreshAnnexureStatus(): void {
+    if (!this.quotationId) return;
+    this.apiService.get<any>(`/quotations/${this.quotationId}/annexure`).subscribe({
+      next: (ann) => {
+        if (!ann || !ann.annexureId) {
+          this.annexureStatus = null;
+          return;
+        }
+        this.annexureStatus = ann.status === 'Approved' ? 'Approved' : 'Draft';
+      },
+      error: () => { this.annexureStatus = null; },
+    });
+  }
+
+  /** Pick the latest-reached stage on first load. Lets a user who
+   *  comes back to a Converted quotation land on Stage 2 immediately
+   *  rather than having to click the stepper. */
+  private computeDefaultStage(): 'quotation' | 'po' | 'viability' | 'annexure' {
+    if (this.annexureStatus) return 'annexure';
+    if (this.viabilityStatus) return 'viability';
+    if (this.poStatus || this.purchaseOrder) return 'po';
+    return 'quotation';
+  }
+
+  /** Phase 1 Reactivate. Replaces the legacy /revert-reject endpoint
+   *  with /reactivate (clearer name, gated by CanReactivate). The
+   *  backend keeps revert-reject as a backward-compat alias for one
+   *  release; new clients hit reactivate. */
+  reactivateQuotation(): void {
+    if (!this.quotationId) return;
+    this.apiService.put(`/quotations/${this.quotationId}/reactivate`, {}).subscribe({
+      next: () => {
+        this.notificationService.success('Quotation reactivated to Approved.');
+        this.loadQuotation(this.quotationId!);
+      },
+      error: (e) => this.notificationService.error(e?.error?.detail || 'Failed to reactivate.'),
+    });
+  }
+
+  /** Privileged Unlock-and-Edit escape valve. Opens the reason
+   *  prompt; on success the audit row is written server-side and
+   *  the form refreshes (ngOnInit-style flag re-eval lets the
+   *  template show edit affordances again). */
+  openUnlockDialog(
+    stage: 'quotation' | 'purchase-order' | 'viability' | 'annexure',
+    stageLabel: string,
+  ): void {
+    if (!this.quotationId) return;
+    const ref = this.dialog.open(LifecycleUnlockDialogComponent, {
+      data: {
+        quotationId: this.quotationId,
+        stage,
+        stageLabel,
+        quotNo: this.quotForm.get('quotNo')?.value || null,
+      },
+      width: '560px',
+      maxWidth: '95vw',
+      disableClose: true,
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.loadQuotation(this.quotationId!);
     });
   }
 

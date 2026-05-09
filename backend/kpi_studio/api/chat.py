@@ -75,6 +75,7 @@ def _msg_to_payload(m: KpiChatMessage) -> ChatMessage:
         chat_message_id=m.chat_message_id,
         chat_session_id=m.chat_session_id,
         role=m.role,
+        kind=getattr(m, "kind", None) or "answer",
         content=m.content or "",
         sql=m.sql,
         rewritten_sql=m.rewritten_sql,

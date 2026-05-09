@@ -44,10 +44,34 @@
             <mat-icon>person</mat-icon>
             <span>Profile Manager</span>
           </button>
+          <button mat-menu-item [matMenuTriggerFor]="tutorialMenu">
+            <mat-icon>school</mat-icon>
+            <span>Tutorial</span>
+          </button>
           <mat-divider></mat-divider>
           <button mat-menu-item (click)="logout()" class="logout-item">
             <mat-icon>logout</mat-icon>
             <span>Log Out</span>
+          </button>
+        </mat-menu>
+
+        <!-- Tutorial submenu — opens the per-feature guide in a modal. -->
+        <mat-menu #tutorialMenu="matMenu">
+          <button mat-menu-item (click)="openTutorial('customer')">
+            <mat-icon>groups</mat-icon>
+            <span>Customers</span>
+          </button>
+          <button mat-menu-item (click)="openTutorial('enquiry')">
+            <mat-icon>help_outline</mat-icon>
+            <span>Enquiries</span>
+          </button>
+          <button mat-menu-item (click)="openTutorial('quotation')">
+            <mat-icon>receipt_long</mat-icon>
+            <span>Quotations</span>
+          </button>
+          <button mat-menu-item (click)="openTutorial('raw-material-cost')">
+            <mat-icon>savings</mat-icon>
+            <span>Raw Material Cost</span>
           </button>
         </mat-menu>
       } @else {

@@ -53,13 +53,12 @@ import { ChatPanelComponent } from '../../components/chat-panel/chat-panel.compo
         font-size: 0.85rem; max-width: 680px;
       }
     }
-    /* Cap the chat at a comfortable reading width on wide monitors and
-       centre it. Block layout (not flex) so the inner chat-panel's
-       width:100% / height:100% reliably fills the wrap — flex-basis
-       quirks were leaving the conversation column shrunk to its
-       intrinsic content width. */
+    /* Flex column container so the inner app-chat-panel host
+       (also a flex column with flex:1) gets a definite size to
+       size against. min-height:0 lets it shrink past content. */
     .panel-wrap {
-      flex: 1 1 auto; min-height: 0;
+      flex: 1 1 0; min-height: 0;
+      display: flex; flex-direction: column;
       width: 100%;
       max-width: 1400px;
       margin: 0 auto;

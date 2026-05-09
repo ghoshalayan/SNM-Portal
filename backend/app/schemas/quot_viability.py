@@ -131,6 +131,10 @@ class ViabilitySheetResponse(BaseModel):
     approvedby: Optional[int] = None
     approvedon: Optional[datetime] = None
     isActive: bool
+    # Phase 1 versioning + Phase 3 freshness pointer.
+    parentViabilityId: Optional[int] = None
+    versionNo: Optional[int] = 1
+    sourcedFromPOVersion: Optional[int] = None
     lines: List[ViabilityLineResponse] = []
 
     class Config:

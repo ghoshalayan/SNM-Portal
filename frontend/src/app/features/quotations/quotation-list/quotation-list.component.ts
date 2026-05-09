@@ -274,10 +274,12 @@ export class QuotationListComponent implements OnInit {
   dateFrom: Date | null = null;
   dateTo: Date | null = null;
   selectedStatus: string | null = null;
+  // Phase-4 collapsed status set. The lifecycle position past
+  // Convert lives on per-stage entities (PO / viability / annexure
+  // statuses), not on QuotSummary.status — so the filter dropdown
+  // only needs the five canonical values.
   statusOptions = [
-    'Draft', 'Approved', 'Matured', 'Reject', 'Revised',
-    'ViabilityGenerated', 'ViabilityApproved',
-    'AnnexureGenerated', 'AnnexureApproved',
+    'Draft', 'Approved', 'Converted', 'Reject', 'Revised',
   ];
   loading = false;
 

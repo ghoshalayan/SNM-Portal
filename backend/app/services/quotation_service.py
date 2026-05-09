@@ -79,8 +79,10 @@ def create_quotation_revision(
         deliveryModeId=original.deliveryModeId,
         refQuotNo=original.refQuotNo,
         remarks=original.remarks,
-        CustomerPONo=original.CustomerPONo,
-        CustomerPODate=original.CustomerPODate,
+        # The PO is captured against a specific quotation version; a
+        # revision starts fresh — the customer is expected to re-issue
+        # a PO against the new version. So we deliberately do NOT copy
+        # the original's QuotPurchaseOrder to the revision.
         ownerUserId=original.ownerUserId,
         ownerRoleId=original.ownerRoleId,
         revisionNo=new_version - 1,

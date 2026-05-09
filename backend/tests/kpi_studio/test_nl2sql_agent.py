@@ -267,9 +267,12 @@ class CapTests(_Base):
                 body = r.json()
                 self.assertFalse(body["succeeded"])
                 self.assertEqual(body["error"], "iteration_limit")
-                # Last step is an "abort" with a useful message.
+                # Last step is an "abort" with a useful message + a
+                # structured ``output.kind`` for the reasoning panel.
                 self.assertEqual(body["steps"][-1]["type"], "abort")
-                self.assertIn("iteration limit", body["steps"][-1]["error"].lower())
+                self.assertEqual(
+                    body["steps"][-1]["output"]["kind"], "iteration_limit",
+                )
                 # Audit row records the failure.
                 with Session() as db:
                     runs = db.query(KpiNlRun).all()
@@ -280,11 +283,10 @@ class CapTests(_Base):
         _run(go())
 
     def test_token_budget_aborts_cleanly(self):
-        # Each turn reports 100k tokens — first turn already busts the
-        # 50k default budget.
+        # First turn reports 200k tokens — busts the 100k default budget.
         async def go():
             provider = ScriptedToolProvider(script=[
-                {"calls": [("list_tables", {})], "usage": {"total_tokens": 100_000}},
+                {"calls": [("list_tables", {})], "usage": {"total_tokens": 200_000}},
                 {"calls": [("propose_sql", {"sql": "SELECT 1", "explanation": "x"})], "usage": {"total_tokens": 1}},
             ])
 
@@ -296,7 +298,14 @@ class CapTests(_Base):
                 self.assertEqual(r.status_code, 200, r.text)
                 body = r.json()
                 self.assertFalse(body["succeeded"])
-                self.assertEqual(body["error"], "token_budget_exceeded")
+                self.assertEqual(body["error"], "token_budget")
+                # Last step is an abort with the token-budget kind on
+                # ``output`` — the friendly user label varies, but the
+                # kind is the stable contract.
+                self.assertEqual(body["steps"][-1]["type"], "abort")
+                self.assertEqual(
+                    body["steps"][-1]["output"]["kind"], "token_budget",
+                )
 
         _run(go())
 

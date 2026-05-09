@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -5,8 +7,17 @@ from app.models.enquiry import CustomerEnquiryCosting, CustomerEnquiryDetails
 from app.models.raw_material_cost import RawMaterialCost
 
 
-def get_tp_cost_for_dia(db: Session, company_id: int, dia: str) -> float | None:
-    """Get the latest TP cost for a given dia from RawMaterialCost."""
+def get_tp_cost_decimal(db: Session, company_id: int, dia: str) -> Decimal | None:
+    """Latest TP cost for a dia, returned as Decimal — use this anywhere the
+    value enters arithmetic that writes back to a Numeric(18,2) column.
+
+    Going Decimal → float → Decimal compounds binary-precision drift across
+    line items (the bug fixed here): a 0.01-paise drift per row × hundreds
+    of rows × dozens of quotations is enough to make finance-side
+    reconciliation fail. ``RawMaterialCost.tpcost`` is already a
+    ``Numeric(18,2)`` column, so SQLAlchemy hands us a Decimal — we just
+    have to stop casting it away.
+    """
     result = (
         db.query(RawMaterialCost.tpcost)
         .filter(
@@ -17,7 +28,18 @@ def get_tp_cost_for_dia(db: Session, company_id: int, dia: str) -> float | None:
         .order_by(RawMaterialCost.effectedFrom.desc())
         .first()
     )
-    return float(result[0]) if result else None
+    return result[0] if result else None
+
+
+def get_tp_cost_for_dia(db: Session, company_id: int, dia: str) -> float | None:
+    """JSON-friendly wrapper for read-only API responses.
+
+    Cast happens at the API boundary only; never use this in calculations
+    that persist back to currency columns. Math paths must call
+    ``get_tp_cost_decimal`` directly.
+    """
+    val = get_tp_cost_decimal(db, company_id, dia)
+    return float(val) if val is not None else None
 
 
 def create_new_costing_version(

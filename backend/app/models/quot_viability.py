@@ -13,6 +13,13 @@ class QuotViabilitySheet(Base, AuditMixin):
     status = Column(String(20), default="Draft", nullable=False)
     approvedby = Column(Integer, ForeignKey("UserMaster.userId"), nullable=True)
     approvedon = Column(DateTime, nullable=True)
+    # Per-stage versioning (Phase 1).
+    parentViabilityId = Column(
+        Integer, ForeignKey("QuotViabilitySheet.viabilityId"), nullable=True,
+    )
+    versionNo = Column(Integer, default=1, nullable=False)
+    # Phase 3 source-version pointer.
+    sourcedFromPOVersion = Column(Integer, nullable=True)
 
     quotation = relationship("QuotSummary", foreign_keys=[quotId])
     approved_by_user = relationship("User", foreign_keys=[approvedby])

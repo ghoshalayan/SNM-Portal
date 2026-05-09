@@ -141,9 +141,13 @@ interface ItemLength { itemLengthId: number; itemId: number; itemLength: string;
             </div>
           </mat-menu>
 
+          <!-- "Fetch from Enquiry" doesn't apply to the PO Working
+               Sheet (PO BOM seeds from the quotation, not the
+               enquiry). Excel export works in both modes; the URL
+               flips per-mode inside the downloadExcel method. -->
           <button mat-stroked-button class="toolbar-btn fetch-btn"
             (click)="fetchFromEnquiry()"
-            *ngIf="enqId && dataSource.data.length === 0 && !readOnly" [disabled]="importing">
+            *ngIf="!isPoMode && enqId && dataSource.data.length === 0 && !readOnly" [disabled]="importing">
             <mat-icon>cloud_download</mat-icon>
             {{ importing ? 'Importing...' : 'Fetch from Enquiry' }}
           </button>
@@ -418,7 +422,26 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
    */
   @Input() isForDeliveryTerm = false;
   @Input() deliveryModeName = '';
+  /** Stage 1 (default) drives the quotation's QuotDetails endpoints.
+   *  Stage 2 ('po') reuses the same grid + dialog but talks to the
+   *  PO Working Sheet endpoints — full feature parity (cost-head
+   *  editing, dia/length pickers, GST mode, TP-cost lookup, dialog
+   *  add/edit) without duplicating any logic. The PO line response
+   *  aliases ``poWorkingSheetId`` as ``quotDtlId`` so the existing
+   *  PK references work uniformly. */
+  @Input() mode: 'quotation' | 'po' = 'quotation';
   @Output() expandedChange = new EventEmitter<boolean>();
+
+  /** Endpoint base for line CRUD. Switches per mode. */
+  get linesEndpoint(): string {
+    return this.mode === 'po'
+      ? `/quotations/${this.quotId}/purchase-order/working-sheet`
+      : `/quotations/${this.quotId}/details`;
+  }
+  /** Some quotation-mode actions don't apply to the PO Working Sheet
+   *  (e.g. "Import from Enquiry", "Export Excel"). Templates gate
+   *  those buttons behind this flag. */
+  get isPoMode(): boolean { return this.mode === 'po'; }
 
   isExpanded = false;
   costHeads = COST_HEADS as string[];
@@ -708,7 +731,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
 
   loadDetails(): void {
     this.loading = true;
-    this.api.get<QuotLineItem[]>(`/quotations/${this.quotId}/details`).subscribe({
+    this.api.get<QuotLineItem[]>(this.linesEndpoint).subscribe({
       next: data => {
         this.dataSource.data = data.map(d => ({ ...d, isEditing: false, isDirty: false, isSaving: false }));
         this.rebuildDisplayedColumns();
@@ -738,11 +761,17 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
     });
   }
 
-  /** Download line items as XLSX in standard quotation working format. */
+  /** Download line items as XLSX in standard quotation working format.
+   *  In PO mode the URL flips to the PO Working Sheet export — the
+   *  backend reuses the same xlsx builder, only the header context
+   *  (customer / site / PO No / PO Date) swaps to come off the PO. */
   downloadExcel(): void {
     if (!this.quotId || this.downloading) return;
     this.downloading = true;
-    const url = `${environment.apiUrl}/quotations/${this.quotId}/details/export-excel`;
+    const path = this.isPoMode
+      ? `/quotations/${this.quotId}/purchase-order/working-sheet/export-excel`
+      : `/quotations/${this.quotId}/details/export-excel`;
+    const url = `${environment.apiUrl}${path}`;
     this.http.get(url, { responseType: 'blob', observe: 'response' }).subscribe({
       next: (resp) => {
         const blob = resp.body;
@@ -752,7 +781,9 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
           return;
         }
         // Extract filename from Content-Disposition header
-        let filename = `quotation-${this.quotId}-line-items.xlsx`;
+        let filename = this.isPoMode
+          ? `po-${this.quotId}-final-working-sheet.xlsx`
+          : `quotation-${this.quotId}-line-items.xlsx`;
         const cd = resp.headers.get('Content-Disposition') || resp.headers.get('content-disposition');
         if (cd) {
           const match = /filename="?([^";]+)"?/i.exec(cd);
@@ -830,7 +861,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
           }
           payload['quantity'] = payload['quantity'] || 1;
           payload['basicRate'] = payload['totRate'];
-          this.api.put(`/quotations/${this.quotId}/details/${row.quotDtlId}`, payload).subscribe();
+          this.api.put(`${this.linesEndpoint}/${row.quotDtlId}`, payload).subscribe();
         }
       }
     }
@@ -868,6 +899,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
           previousRow,
           isForDeliveryTerm: this.isForDeliveryTerm,
           deliveryModeName: this.deliveryModeName,
+          mode: this.mode,
         },
         disableClose: true,
       });
@@ -890,7 +922,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
     });
     ref.afterClosed().subscribe(ok => {
       if (ok) {
-        this.api.delete(`/quotations/${this.quotId}/details/${row.quotDtlId}`).subscribe({
+        this.api.delete(`${this.linesEndpoint}/${row.quotDtlId}`).subscribe({
           next: () => {
             this.dataSource.data = this.dataSource.data.filter((_, i) => i !== index);
             this.notify.success('Deleted');

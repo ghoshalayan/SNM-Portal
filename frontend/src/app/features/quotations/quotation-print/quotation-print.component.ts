@@ -726,10 +726,27 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
     this.renderedFooter = null;
   }
 
+  /** HTML-escape a string so it cannot break out of text/attribute context.
+   * Quotes are escaped for safety inside double-quoted attributes (`="..."`),
+   * which template authors may use (`<a href="{{customerWebsite}}">`).
+   */
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   replacePlaceholders(html: string): string {
     if (!html || !this.quotation) return html;
     const q = this.quotation;
-    const map: Record<string, string> = {
+    // Plain-text values — every one of these flows from the API (customer
+    // name, contact name, remarks, etc.) and lands inside a sanitizer-bypassed
+    // HTML blob, so any `<script>` or `<img onerror>` in the underlying data
+    // would execute. Escape them all before substitution.
+    const textValues: Record<string, string> = {
       '{{quotNo}}': q.quotNo || '',
       '{{quotDate}}': q.quotDate ? new Date(q.quotDate).toLocaleDateString('en-IN') : '',
       '{{customerName}}': q.customerName || '',
@@ -752,10 +769,6 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
       '{{remarks}}': q.remarks || '',
       '{{grandTotal}}': '₹ ' + this.grandTotal.toLocaleString('en-IN',
         { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-      '{{lineItemsTable}}': this.buildLineItemsHtml(true),
-      '{{withGTlineItemsTable}}': this.buildLineItemsHtml(true),
-      '{{withoutGTlineItemsTable}}': this.buildLineItemsHtml(false),
-      '{{tncList}}': this.buildTncHtml(),
       '{{companyName}}': q.companyName || '',
       '{{companyAddress}}': q.companyAddress || '',
       '{{companyGSTN}}': q.companyGSTN || '',
@@ -763,15 +776,26 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
       '{{companyEmail}}': q.companyEmail || '',
       '{{companyWebsite}}': q.companyWebsite || '',
       '{{companyPAN}}': q.companyPAN || '',
-      // Owner placeholders
       '{{ownerName}}': q.ownerName || '',
       '{{ownerCode}}': q.ownerCode || '',
       '{{ownerEmail}}': q.ownerEmail || '',
       '{{ownerPhone}}': q.ownerPhone || '',
       '{{ownerDesignation}}': q.ownerDesignation || '',
     };
+    // HTML fragments built by this component — already escaped internally
+    // by `buildLineItemsHtml` / `buildTncHtml` (see those methods). These
+    // must NOT be re-escaped or the table markup turns into literal text.
+    const htmlValues: Record<string, string> = {
+      '{{lineItemsTable}}': this.buildLineItemsHtml(true),
+      '{{withGTlineItemsTable}}': this.buildLineItemsHtml(true),
+      '{{withoutGTlineItemsTable}}': this.buildLineItemsHtml(false),
+      '{{tncList}}': this.buildTncHtml(),
+    };
     let result = html;
-    for (const [token, value] of Object.entries(map)) {
+    for (const [token, value] of Object.entries(textValues)) {
+      result = result.split(token).join(this.escapeHtml(value));
+    }
+    for (const [token, value] of Object.entries(htmlValues)) {
       result = result.split(token).join(value);
     }
     return result;
@@ -805,18 +829,22 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
         ? `<td style="${td}${bg}text-align:center;">${d.IGST?.toFixed(2) ?? ''}</td>`
         : `<td style="${td}${bg}text-align:center;">${d.CGST?.toFixed(2) ?? ''}</td>
            <td style="${td}${bg}text-align:center;">${d.SGST?.toFixed(2) ?? ''}</td>`;
+      // Free-text fields (itemName, itemGradeName, itemUnit, modeOfDispatch)
+      // come straight from the API and ride into a sanitizer-bypassed HTML
+      // blob downstream. Escape them; numeric fields formatted with
+      // `.toFixed()` / `??` are safe by construction.
       html += `<tr>
         <td style="${td}${bg}text-align:center;">${i + 1}</td>
-        <td style="${td}${bg}">${d.itemName || ''}</td>
-        <td style="${td}${bg}">${d.itemGradeName || ''}</td>
+        <td style="${td}${bg}">${this.escapeHtml(d.itemName || '')}</td>
+        <td style="${td}${bg}">${this.escapeHtml(d.itemGradeName || '')}</td>
         <td style="${td}${bg}text-align:center;">${d.itemDia || ''}</td>
         <td style="${td}${bg}text-align:center;">${d.itemLength || ''}</td>
-        <td style="${td}${bg}text-align:center;">${d.itemUnit || ''}</td>
+        <td style="${td}${bg}text-align:center;">${this.escapeHtml(d.itemUnit || '')}</td>
         <td style="${td}${bg}text-align:right;">${d.quantity ?? ''}</td>
         <td style="${td}${bg}text-align:right;">${d.totRate?.toFixed(2) ?? ''}</td>
         ${gc}
         <td style="${td}${bg}text-align:right;font-weight:500;">${d.totAmount?.toFixed(2) ?? ''}</td>
-        <td style="${td}${bg}">${d.modeOfDispatch || ''}</td>
+        <td style="${td}${bg}">${this.escapeHtml(d.modeOfDispatch || '')}</td>
       </tr>`;
     });
     html += `</tbody>`;
@@ -837,7 +865,12 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
     if (this.tncList.length === 0) return '';
     let html = '<ol style="margin:0;padding-left:20px;font-size:11px;line-height:1.7;">';
     for (const t of this.tncList) {
-      html += `<li>${t.tncName ? '<strong>' + t.tncName + ':</strong> ' : ''}${t.tncDescription || ''}</li>`;
+      // tncName / tncDescription are free-text fields stored in the DB and
+      // editable from the master screen. Without escaping, a description like
+      // `<img src=x onerror=alert(1)>` runs as soon as the template substitutes
+      // {{tncList}} into the bypassed HTML.
+      const name = t.tncName ? `<strong>${this.escapeHtml(t.tncName)}:</strong> ` : '';
+      html += `<li>${name}${this.escapeHtml(t.tncDescription || '')}</li>`;
     }
     html += '</ol>';
     return html;

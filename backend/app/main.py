@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.core.config import settings
@@ -45,11 +44,15 @@ def create_app() -> FastAPI:
     # the main DB until KPI_DSN is configured (see kpisetup.md).
     _mount_kpi_studio(app)
 
-    # Serve local uploads when FILE_STORAGE_MODE=local
+    # When FILE_STORAGE_MODE=local, ensure the upload root exists. We do NOT
+    # expose it as a `StaticFiles` mount: that would let any caller (even
+    # unauthenticated) browse `/local-files/<uuid>` and bypass the per-asset
+    # tenant + parent-entity checks enforced in `/api/v1/assets/{id}/download`.
+    # The `/local-files/...` URL stored in `Asset.fileUrl` is now an internal
+    # marker only — `_extract_blob_path` parses it back into a blob name when
+    # the auth-checked download endpoint streams the file.
     if settings.FILE_STORAGE_MODE == "local":
-        uploads_dir = Path(settings.LOCAL_STORAGE_PATH)
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        app.mount("/local-files", StaticFiles(directory=str(uploads_dir)), name="local-files")
+        Path(settings.LOCAL_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
 
     @app.get("/health")
     def health_check():

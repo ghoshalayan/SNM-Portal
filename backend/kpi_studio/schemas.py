@@ -889,6 +889,12 @@ class ChatMessage(BaseModel):
     chat_message_id: int
     chat_session_id: int
     role: str  # 'user' | 'assistant'
+    # Discriminator for the *kind* of assistant turn:
+    #   'answer'  - canonical successful query turn (default)
+    #   'clarify' - Pre-flight Planner asking the user a follow-up
+    # Frontend chooses bubble styling + suppresses chart/SQL panes
+    # accordingly. Always 'answer' for user turns by convention.
+    kind: str = "answer"
     content: str
 
     # Assistant-only payload — null for user turns.

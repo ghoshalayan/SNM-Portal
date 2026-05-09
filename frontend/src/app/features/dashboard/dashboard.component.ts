@@ -363,7 +363,12 @@ const SIZE_RANK: Record<CardSize, number> = {
       .spacer { flex: 1; }
       strong { color: var(--snm-text-primary); }
     }
-    .drawer-body { flex: 1; min-height: 0; padding: 8px; }
+    /* Flex column so the chat-panel host (flex:1 column) sizes
+       correctly. */
+    .drawer-body {
+      flex: 1 1 0; min-height: 0;
+      display: flex; flex-direction: column;
+    }
   `],
 })
 export class DashboardComponent implements OnInit {

@@ -187,9 +187,12 @@ export class EnquiryDetailDialogComponent implements OnInit {
     this.api.get<ItemGrade[]>('/masters/item-grades').subscribe({
       next: d => {
         this.itemGrades = d;
-        // Default grade to "Fe500D" for new items
+        // Default grade to whichever master row contains "550D"
+        // (e.g. "550D", "Fe550D", "550D Plus") for net-new enquiry
+        // lines only — tolerant match so the default still picks up
+        // when the master uses a prefixed naming convention.
         if (!this.isEdit && !this.row.itemGradeId) {
-          const def = d.find(g => g.itemGradeName === 'Fe500D' || g.itemGradeName === 'Fe 500D');
+          const def = d.find(g => (g.itemGradeName || '').toUpperCase().includes('550D'));
           if (def) {
             this.row.itemGradeId = def.itemGradeId;
             this.row.itemGradeName = def.itemGradeName;

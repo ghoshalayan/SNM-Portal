@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional
 
@@ -25,8 +25,20 @@ from app.schemas.quotation import (
     QuotTncCreate, QuotTncResponse, QuotTncReorderItem,
     QuotFollowUpCreate, QuotFollowUpResponse,
 )
+from app.schemas.quot_purchase_order import (
+    QuotPurchaseOrderBody, QuotPurchaseOrderResponse, UnlockEditBody,
+    StageVersionListItem,
+)
+from app.services import viability_service, annexure_service
+from app.schemas.quot_po_working_sheet import (
+    QuotPOWorkingSheetLineBody, QuotPOWorkingSheetLineResponse,
+)
 from app.models.customer import CustomerSite
 from app.services.quotation_service import create_quotation_revision
+from app.services import purchase_order_service, lifecycle_service, po_working_sheet_service
+from app.models.quot_purchase_order import QuotPurchaseOrder
+from app.models.quot_viability import QuotViabilitySheet
+from app.models.quot_annexure import QuotAnnexure
 from app.services.access_service import (
     AccessContext, get_access_context,
     apply_company_filter, apply_hierarchy_filter, apply_location_filter,
@@ -294,8 +306,11 @@ def get_quotation_print_data(
         "versionNo": quot.versionNo,
         "status": quot.status,
         "refQuotNo": quot.refQuotNo,
-        "CustomerPONo": quot.CustomerPONo,
-        "CustomerPODate": quot.CustomerPODate,
+        # PO no/date moved to QuotPurchaseOrder; surface them here from
+        # the linked PO so the print payload stays backward-compatible
+        # with the consumer template (None until PO is captured).
+        "CustomerPONo": quot.purchase_order.poNo if quot.purchase_order else None,
+        "CustomerPODate": quot.purchase_order.poDate if quot.purchase_order else None,
         "remarks": quot.remarks,
         # Customer details
         "customerName": customer.customerName if customer else None,
@@ -352,8 +367,24 @@ def _build_company_address(company) -> str:
 
 
 def _get_quot_or_403(db: Session, quot_id: int, ctx: AccessContext) -> QuotSummary:
-    """Fetch quotation with F2/F5/F6 checks. Raises 404/403."""
-    q = db.query(QuotSummary).outerjoin(
+    """Fetch quotation with F2/F5/F6 checks. Raises 404/403.
+
+    Eager-loads ``purchase_order`` and its nested customer / contact /
+    billing_site / consignee_site so the response serializer can resolve
+    the denormalised labels (customerName, contactPersonName,
+    billing/consigneeSiteAddress) without N+1 lazy queries — and so
+    Pydantic's ``from_attributes`` walk doesn't blow up after the
+    session closes.
+    """
+    from app.models.quot_purchase_order import QuotPurchaseOrder
+    q = db.query(QuotSummary).options(
+        selectinload(QuotSummary.purchase_order).options(
+            selectinload(QuotPurchaseOrder.customer),
+            selectinload(QuotPurchaseOrder.contact),
+            selectinload(QuotPurchaseOrder.billing_site),
+            selectinload(QuotPurchaseOrder.consignee_site),
+        ),
+    ).outerjoin(
         CustomerSite, QuotSummary.siteId == CustomerSite.siteId,
     ).filter(
         QuotSummary.quotId == quot_id,
@@ -411,6 +442,18 @@ def create_quotation(
     owner = resolve_owner(db, current_user, code_user_id)
 
     user_supplied_quot_no = data_dict.get("quotNo")
+    # Manual override of the auto-generated FY-scoped quotation number is
+    # a privileged action — it bypasses the serial allocator and lets the
+    # caller pick any string, which is sensitive for audit and number-
+    # sequence integrity. ``CanEditNumber`` is the dedicated gate.
+    # Migration ``v3w4x5y6z7a8`` backfills it from ``CanAdd`` so existing
+    # roles that today rely on the (previously ungated) override keep
+    # working; admins can subsequently revoke it for stricter control.
+    if user_supplied_quot_no and not ctx.has_permission(MENU, "CanEditNumber"):
+        raise HTTPException(
+            403,
+            "You do not have permission to override the auto-generated quotation number.",
+        )
     fy_code: Optional[str] = None
     if not user_supplied_quot_no:
         fy = db.query(FinancialYear).filter(
@@ -447,11 +490,20 @@ def create_quotation(
         )
 
     from app.services.number_allocator import allocate_and_flush
+    # C2: serialize auto-gen allocation per (company, owner-userCode, fy) so
+    # parallel "create quotation" calls can't read the same MAX() and
+    # collide. User-supplied numbers stay on the old optimistic path —
+    # there's no count to race on, the unique index just bounces dupes.
+    _alloc_lock_key = (
+        None if user_supplied_quot_no
+        else f"NUM:QUOT:{ctx.company_id}:{owner['userCode']}:{fy_code}"
+    )
     quot = allocate_and_flush(
         db,
         build=_build_quot,
         compute_number=_next_quot_no,
         max_attempts=1 if user_supplied_quot_no else 10,
+        lock_key=_alloc_lock_key,
         conflict_message=(
             "Quotation number already exists — choose a different one."
             if user_supplied_quot_no
@@ -490,30 +542,31 @@ def update_quotation(
     # Revised quotations are fully locked
     if quot.status == "Revised":
         raise HTTPException(400, "Cannot edit a Revised quotation")
-    # Matured quotations — only PO fields are editable
+    # Converted quotations — generic editing is no longer supported
+    # through this endpoint. PO header changes (the only thing that
+    # used to be legal here) now go through
+    # PUT /quotations/{id}/purchase-order so the audit trail and the
+    # locking rule live in one place. Stage-1 amendments after Convert
+    # use the privileged Unlock-and-Edit path.
+    if quot.status == "Converted":
+        raise HTTPException(
+            400,
+            "Quotation is Converted. Edit the captured PO via "
+            "PUT /quotations/{id}/purchase-order, or use the privileged "
+            "Unlock-and-Edit action to amend Stage-1 fields.",
+        )
     changed_fields: list[str] = []
-    if quot.status == "Matured":
-        allowed = {"CustomerPONo", "CustomerPODate"}
-        update_data = {k: v for k, v in data.model_dump(exclude_unset=True).items() if k in allowed}
-        if not update_data:
-            raise HTTPException(400, "Only PO No and PO Date can be edited on a Matured quotation")
-        for k, v in update_data.items():
-            if getattr(quot, k, None) != v:
-                changed_fields.append(k)
-            setattr(quot, k, v)
-    else:
-        for k, v in data.model_dump(exclude_unset=True).items():
-            if getattr(quot, k, None) != v:
-                changed_fields.append(k)
-            setattr(quot, k, v)
+    for k, v in data.model_dump(exclude_unset=True).items():
+        if getattr(quot, k, None) != v:
+            changed_fields.append(k)
+        setattr(quot, k, v)
     quot.lastupdateby = ctx.user_id
     if changed_fields:
-        # PO-only edits get their own label so they stand out in the timeline
-        po_only = set(changed_fields) <= {"CustomerPONo", "CustomerPODate"}
-        action_label = "PO details saved" if po_only else "Quotation updated"
-        log_action(db, quot_id=quot.quotId, company_id=quot.companyId,
-                   action=action_label, status=quot.status, user_id=ctx.user_id,
-                   details=f"fields: {', '.join(changed_fields)}")
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="Quotation updated", status=quot.status, user_id=ctx.user_id,
+            details=f"fields: {', '.join(changed_fields)}",
+        )
     db.commit()
     db.refresh(quot)
     return quot
@@ -693,11 +746,25 @@ def get_quotation_versions(
     ctx: AccessContext = Depends(get_access_context),
 ):
     require_permission(MENU, "CanRead", ctx)
-    quot = db.query(QuotSummary).filter(QuotSummary.quotId == quot_id).first()
-    if not quot:
-        raise HTTPException(status_code=404, detail="Quotation not found")
+    # Run the entry quotation through the same F2/F5/F6 pipeline the rest of
+    # the router uses — without it a caller could probe `parentQuotId` for
+    # any quotation in the database and learn revision-chain anchors across
+    # tenants. (Was: bare `db.query(QuotSummary).filter(quotId == quot_id)`.)
+    quot = _get_quot_or_403(db, quot_id, ctx)
     parent_id = quot.parentQuotId or quot.quotId
-    q = db.query(QuotSummary).filter(
+    # Eager-load ``purchase_order`` plus its nested customer / contact
+    # / sites — the response shape now carries denormalised labels
+    # resolved from those relationships, so without the chain every
+    # version row triggers an N+1 storm during Pydantic serialization.
+    from app.models.quot_purchase_order import QuotPurchaseOrder
+    q = db.query(QuotSummary).options(
+        selectinload(QuotSummary.purchase_order).options(
+            selectinload(QuotPurchaseOrder.customer),
+            selectinload(QuotPurchaseOrder.contact),
+            selectinload(QuotPurchaseOrder.billing_site),
+            selectinload(QuotPurchaseOrder.consignee_site),
+        ),
+    ).filter(
         (QuotSummary.parentQuotId == parent_id) | (QuotSummary.quotId == parent_id),
         QuotSummary.isActive == True,
     )
@@ -825,41 +892,113 @@ def approve_quotation(
 @router.put("/{quot_id}/mature", response_model=QuotSummaryResponse)
 def mature_quotation(
     quot_id: int,
+    body: QuotPurchaseOrderBody,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """Mark quotation as Matured (PO received). Only Approved quotations can be matured.
+    """Capture the customer Purchase Order and transition Approved →
+    Matured atomically.
 
-    Requires Customer PO No and PO Date to be populated on the quotation.
-    Clients are expected to save those fields first — the Approved → Matured
-    transition is irreversible, so we verify the evidence is recorded.
+    The body is the PO header the customer actually sent in: PO No,
+    PO Date, customer + contact (defaulted to the quotation's, but
+    overridable for group-company billing), and billing + consignee
+    addresses. For each address pair the body must populate exactly
+    one of (siteId, addressManual) — see ``purchase_order_service``.
     """
     try:
         require_permission(MENU, "CanApprove", ctx)
         quot = _get_quot_or_403(db, quot_id, ctx)
         if quot.status != "Approved":
-            raise HTTPException(400, f"Only Approved quotations can be matured (current: {quot.status})")
-        missing = []
-        if not quot.CustomerPONo or not str(quot.CustomerPONo).strip():
-            missing.append("Customer PO No")
-        if not quot.CustomerPODate:
-            missing.append("Customer PO Date")
-        if missing:
             raise HTTPException(
                 400,
-                f"Cannot mature quotation: {', '.join(missing)} must be filled before marking as Matured.",
+                f"Only Approved quotations can be matured (current: {quot.status})",
             )
-        quot.status = "Matured"
+        try:
+            po = purchase_order_service.create_or_update_po(
+                db, quot, body, user_id=ctx.user_id,
+            )
+        except purchase_order_service.PurchaseOrderValidationError as exc:
+            raise HTTPException(400, str(exc))
+
+        # Phase-1 semantics: ``Matured`` collapsed into ``Converted`` on
+        # the quotation, AND the PO row goes straight to ``Submitted``
+        # because legacy /mature callers expected single-step capture.
+        # New callers should use /convert + /purchase-order/submit for
+        # the explicit two-step flow.
+        po.status = "Submitted"
+        po.sourcedFromQuotationVersion = quot.versionNo  # Phase 3 freshness
+        quot.status = "Converted"
+        quot.convertedOn = now_ist()
+        quot.convertedBy = ctx.user_id
         quot.lastupdateby = ctx.user_id
-        log_action(db, quot_id=quot.quotId, company_id=quot.companyId,
-                   action="Matured (PO Received)", status=quot.status, user_id=ctx.user_id,
-                   details=f"PO {quot.CustomerPONo} dated {quot.CustomerPODate}" if quot.CustomerPONo else None)
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="Converted (PO Submitted)", status=quot.status,
+            user_id=ctx.user_id,
+            details=f"PO {po.poNo} dated {po.poDate}",
+        )
         db.commit()
         db.refresh(quot)
         return quot
     except Exception as e:
         log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
                     action="Mature", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.get(
+    "/{quot_id}/purchase-order",
+    response_model=Optional[QuotPurchaseOrderResponse],
+)
+def get_purchase_order(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Fetch the active PO for a quotation, or null when one hasn't been
+    captured yet (e.g. quotation still in Draft / Approved)."""
+    require_permission(MENU, "CanRead", ctx)
+    quot = _get_quot_or_403(db, quot_id, ctx)
+    return purchase_order_service.get_po(db, quot)
+
+
+@router.put("/{quot_id}/purchase-order", response_model=QuotPurchaseOrderResponse)
+def update_purchase_order(
+    quot_id: int,
+    body: QuotPurchaseOrderBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Edit a PO that was already captured. Allowed only while the
+    quotation is in Matured status — once viability work begins
+    (status = ViabilityGenerated or later) the PO is locked so the
+    downstream artifacts can't drift from the source they were
+    generated against. 409 in that case."""
+    try:
+        require_permission(MENU, "CanApprove", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        try:
+            purchase_order_service.ensure_editable(quot)
+        except purchase_order_service.PurchaseOrderConflictError as exc:
+            raise HTTPException(409, str(exc))
+        try:
+            po = purchase_order_service.create_or_update_po(
+                db, quot, body, user_id=ctx.user_id,
+            )
+        except purchase_order_service.PurchaseOrderValidationError as exc:
+            raise HTTPException(400, str(exc))
+        quot.lastupdateby = ctx.user_id
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="PO Updated", status=quot.status, user_id=ctx.user_id,
+            details=f"PO {po.poNo} dated {po.poDate}",
+        )
+        db.commit()
+        db.refresh(po)
+        return po
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Update", user_id=ctx.user_id, exc=e)
         raise
 
 
@@ -889,46 +1028,677 @@ def reject_quotation(
 
 
 @router.put("/{quot_id}/revert-reject", response_model=QuotSummaryResponse)
-def revert_reject_quotation(
+def revert_reject_quotation_legacy(
     quot_id: int,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """Revert a rejected quotation back to Approved."""
+    """Phase-4 sunset: ``/revert-reject`` is now an alias for the
+    canonical ``/reactivate`` endpoint. Frontend has been on the new
+    name since Phase 1; this stub preserves the URL for any external
+    integration still pointing at it. Will be removed in a follow-up
+    release after a deprecation window."""
+    return reactivate_quotation(quot_id, db=db, ctx=ctx)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 lifecycle transitions: Convert, Reactivate, PO Submit/Reject,
+# generic per-stage Unlock-and-Edit
+# ---------------------------------------------------------------------------
+
+@router.put("/{quot_id}/convert", response_model=QuotSummaryResponse)
+def convert_quotation(
+    quot_id: int,
+    body: QuotPurchaseOrderBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Stage-1 forward gate: ``Approved → Converted``.
+
+    Captures the customer PO atomically with the status transition
+    (same body shape as legacy /mature), but leaves the PO row in
+    ``Draft`` so the user can fill in the Final Working Sheet (Phase
+    1.5) before firing /purchase-order/submit.
+    """
     try:
-        require_permission(MENU, "CanApprove", ctx)
+        require_permission(MENU, "CanConvert", ctx)
         quot = _get_quot_or_403(db, quot_id, ctx)
-        if quot.status != "Reject":
-            raise HTTPException(400, "Only Rejected quotations can be reverted")
+        if quot.status != "Approved":
+            raise HTTPException(
+                400,
+                f"Only Approved quotations can be Converted (current: {quot.status})",
+            )
+        try:
+            po = purchase_order_service.create_or_update_po(
+                db, quot, body, user_id=ctx.user_id,
+            )
+        except purchase_order_service.PurchaseOrderValidationError as exc:
+            raise HTTPException(400, str(exc))
 
-        # Preserve the original approval trail. If a prior handover cleared
-        # approvedby/on, the quotation would flip back to Approved with no
-        # approver recorded — fill that gap by attributing to the reverter.
-        prior_approver = quot.approvedby
-        prior_approvedon = quot.approvedon
-        if quot.approvedby is None:
-            quot.approvedby = ctx.user_id
-            quot.approvedon = now_ist()
-
-        quot.status = "Approved"
+        po.status = "Draft"
+        # Phase 3 freshness pointer — record which quotation version
+        # this PO was Converted from. The frontend compares this to
+        # the current quotation head to surface a stale banner if the
+        # quotation is later Revised.
+        po.sourcedFromQuotationVersion = quot.versionNo
+        quot.status = "Converted"
+        quot.convertedOn = now_ist()
+        quot.convertedBy = ctx.user_id
         quot.lastupdateby = ctx.user_id
-
-        # Detail string captures the prior state so the timeline shows exactly
-        # which approval record is in effect after the revert.
-        detail = (
-            f"original approvedby={prior_approver}, approvedon={prior_approvedon}"
-            if prior_approver
-            else f"no prior approver; attributed to reverter (user {ctx.user_id})"
+        # Clone the quotation's Working Sheet into the PO's Final
+        # Working Sheet so the user can immediately tweak qty / cost
+        # heads on the Stage-2 grid. Idempotent on re-Convert (e.g.
+        # after a Reject) — preserves any in-flight edits.
+        cloned = po_working_sheet_service.clone_from_quotation(
+            db, po, quot, user_id=ctx.user_id,
         )
-        log_action(db, quot_id=quot.quotId, company_id=quot.companyId,
-                   action="Reverted to Approved", status=quot.status,
-                   user_id=ctx.user_id, details=detail)
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="Converted", status=quot.status, user_id=ctx.user_id,
+            details=f"PO {po.poNo} dated {po.poDate} · {len(cloned)} working-sheet lines cloned",
+        )
         db.commit()
         db.refresh(quot)
         return quot
     except Exception as e:
         log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
-                    action="Revert Reject", user_id=ctx.user_id, exc=e)
+                    action="Convert", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.put("/{quot_id}/reactivate", response_model=QuotSummaryResponse)
+def reactivate_quotation(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Reactivate a Rejected quotation back to Approved.
+
+    Replaces the legacy /revert-reject with a clearer name and the
+    new ``CanReactivate`` permission. /revert-reject stays as an
+    alias for backward compat for one release.
+    """
+    try:
+        require_permission(MENU, "CanReactivate", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        if quot.status != "Reject":
+            raise HTTPException(
+                400, f"Only Rejected quotations can be reactivated (current: {quot.status})",
+            )
+        if quot.approvedby is None:
+            quot.approvedby = ctx.user_id
+            quot.approvedon = now_ist()
+        quot.status = "Approved"
+        quot.lastupdateby = ctx.user_id
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="Reactivated", status=quot.status, user_id=ctx.user_id,
+        )
+        db.commit()
+        db.refresh(quot)
+        return quot
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="Reactivate", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.put("/{quot_id}/purchase-order/submit", response_model=QuotPurchaseOrderResponse)
+def submit_purchase_order(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Stage-2 forward gate: PO ``Draft → Submitted``. Quotation
+    stays at ``Converted`` (Stage-2 internal state)."""
+    try:
+        require_permission(MENU, "CanSubmitPO", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        if quot.status != "Converted":
+            raise HTTPException(
+                400, f"PO can only be submitted while the quotation is Converted (current: {quot.status})",
+            )
+        try:
+            po = purchase_order_service.submit_po(db, quot, user_id=ctx.user_id)
+        except purchase_order_service.PurchaseOrderConflictError as exc:
+            raise HTTPException(409, str(exc))
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="PO Submitted & Matured", status=quot.status,
+            user_id=ctx.user_id,
+            details=f"PO {po.poNo} v{po.versionNo}",
+        )
+        db.commit()
+        db.refresh(po)
+        return po
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Submit", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.put("/{quot_id}/purchase-order/reject", response_model=QuotSummaryResponse)
+def reject_purchase_order(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Stage-2 backward escape: PO ``Submitted → Rejected``, AND
+    quotation un-Converts back to ``Approved`` so the user can
+    Revise / re-Convert cleanly."""
+    try:
+        require_permission(MENU, "CanRejectPO", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        try:
+            po = purchase_order_service.reject_po(db, quot, user_id=ctx.user_id)
+        except purchase_order_service.PurchaseOrderConflictError as exc:
+            raise HTTPException(409, str(exc))
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="PO Rejected (un-Converted)", status=quot.status,
+            user_id=ctx.user_id,
+            details=f"PO {po.poNo} → Rejected; quotation back to Approved",
+        )
+        db.commit()
+        db.refresh(quot)
+        return quot
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Reject", user_id=ctx.user_id, exc=e)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5 — Final Working Sheet (Stage-2 BOM) CRUD
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{quot_id}/purchase-order/working-sheet",
+    response_model=List[QuotPOWorkingSheetLineResponse],
+)
+def list_po_working_sheet(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """List active Final Working Sheet lines for the captured PO.
+    Returns an empty list when no PO has been captured yet."""
+    require_permission(MENU, "CanRead", ctx)
+    quot = _get_quot_or_403(db, quot_id, ctx)
+    po = purchase_order_service.get_po(db, quot)
+    if po is None:
+        return []
+    return po_working_sheet_service.list_lines(db, po)
+
+
+@router.post(
+    "/{quot_id}/purchase-order/working-sheet",
+    response_model=QuotPOWorkingSheetLineResponse,
+    status_code=201,
+)
+def add_po_working_sheet_line(
+    quot_id: int,
+    body: QuotPOWorkingSheetLineBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Add a new Final Working Sheet line. Allowed only while the
+    PO is in Draft. Reuses ``CanEdit`` on the Quotations menu — the
+    line CRUD is sub-resource of the PO and the route layer already
+    holds the F2/F5/F6 visibility filter via ``_get_quot_or_403``."""
+    try:
+        require_permission(MENU, "CanEdit", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        po = purchase_order_service.get_po(db, quot)
+        if po is None:
+            raise HTTPException(404, "No purchase order on this quotation.")
+        try:
+            line = po_working_sheet_service.add_line(
+                db, po, body, user_id=ctx.user_id,
+            )
+        except po_working_sheet_service.WorkingSheetLockedError as exc:
+            raise HTTPException(409, str(exc))
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="PO Working Sheet line added", status=quot.status,
+            user_id=ctx.user_id,
+            details=f"line {line.poWorkingSheetId}",
+        )
+        db.commit()
+        db.refresh(line)
+        return line
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Working Sheet add", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.put(
+    "/{quot_id}/purchase-order/working-sheet/{line_id}",
+    response_model=QuotPOWorkingSheetLineResponse,
+)
+def update_po_working_sheet_line(
+    quot_id: int,
+    line_id: int,
+    body: QuotPOWorkingSheetLineBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Edit one Final Working Sheet line. Allowed only while the PO
+    is in Draft."""
+    try:
+        require_permission(MENU, "CanEdit", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        po = purchase_order_service.get_po(db, quot)
+        if po is None:
+            raise HTTPException(404, "No purchase order on this quotation.")
+        try:
+            line = po_working_sheet_service.update_line(
+                db, po, line_id, body, user_id=ctx.user_id,
+            )
+        except po_working_sheet_service.WorkingSheetLockedError as exc:
+            raise HTTPException(409, str(exc))
+        except po_working_sheet_service.WorkingSheetNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        db.commit()
+        db.refresh(line)
+        return line
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Working Sheet update", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.delete(
+    "/{quot_id}/purchase-order/working-sheet/{line_id}",
+    status_code=204,
+)
+def delete_po_working_sheet_line(
+    quot_id: int,
+    line_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Soft-delete one Final Working Sheet line. Allowed only while
+    the PO is in Draft."""
+    try:
+        require_permission(MENU, "CanEdit", ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+        po = purchase_order_service.get_po(db, quot)
+        if po is None:
+            raise HTTPException(404, "No purchase order on this quotation.")
+        try:
+            po_working_sheet_service.delete_line(
+                db, po, line_id, user_id=ctx.user_id,
+            )
+        except po_working_sheet_service.WorkingSheetLockedError as exc:
+            raise HTTPException(409, str(exc))
+        except po_working_sheet_service.WorkingSheetNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action="PO Working Sheet line deleted", status=quot.status,
+            user_id=ctx.user_id,
+            details=f"line {line_id}",
+        )
+        db.commit()
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action="PO Working Sheet delete", user_id=ctx.user_id, exc=e)
+        raise
+
+
+@router.post("/{quot_id}/{stage}/unlock-edit", status_code=201)
+def unlock_edit_stage(
+    quot_id: int,
+    stage: str,
+    body: UnlockEditBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Privileged escape valve. Per-stage permission flag gates the
+    action; the underlying entity row is NOT mutated — this just
+    writes a ``LifecycleUnlockAudit`` row so admins can trace the
+    override. The frontend then unhides edit affordances on that row
+    for the current user's session.
+
+    URL stage segment accepts ``quotation``, ``purchase-order``,
+    ``viability``, ``annexure``.
+    """
+    try:
+        canonical_stage = lifecycle_service.resolve_stage(stage)
+        if canonical_stage is None:
+            raise HTTPException(404, f"Unknown lifecycle stage: {stage!r}")
+
+        flag = lifecycle_service.STAGE_TO_UNLOCK_FLAG[canonical_stage]
+        require_permission(MENU, flag, ctx)
+
+        quot = _get_quot_or_403(db, quot_id, ctx)
+
+        # Resolve the entity ID for the audit row. For the quotation
+        # itself it's the quotId; for downstream stages we look up the
+        # current head via the same model the API surface uses.
+        if canonical_stage == lifecycle_service.STAGE_QUOTATION:
+            entity_id = quot.quotId
+        elif canonical_stage == lifecycle_service.STAGE_PURCHASE_ORDER:
+            po = purchase_order_service.get_po(db, quot)
+            if po is None:
+                raise HTTPException(404, "No purchase order to unlock.")
+            entity_id = po.quotPOId
+        elif canonical_stage == lifecycle_service.STAGE_VIABILITY:
+            sheet = (
+                db.query(QuotViabilitySheet)
+                .filter(
+                    QuotViabilitySheet.quotId == quot.quotId,
+                    QuotViabilitySheet.isActive == True,  # noqa: E712
+                )
+                .first()
+            )
+            if sheet is None:
+                raise HTTPException(404, "No viability sheet to unlock.")
+            entity_id = sheet.viabilityId
+        else:  # ANNEXURE
+            ann = (
+                db.query(QuotAnnexure)
+                .filter(
+                    QuotAnnexure.quotId == quot.quotId,
+                    QuotAnnexure.isActive == True,  # noqa: E712
+                )
+                .first()
+            )
+            if ann is None:
+                raise HTTPException(404, "No annexure to unlock.")
+            entity_id = ann.annexureId
+
+        audit = lifecycle_service.write_unlock_audit(
+            db,
+            company_id=quot.companyId,
+            stage=canonical_stage,
+            entity_id=entity_id,
+            user_id=ctx.user_id,
+            reason=body.reason,
+        )
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action=f"Unlocked {canonical_stage}", status=quot.status,
+            user_id=ctx.user_id,
+            details=(body.reason or None),
+        )
+        db.commit()
+        return {
+            "auditId": audit.auditId,
+            "stage": canonical_stage,
+            "entityId": entity_id,
+            "unlockedOn": audit.unlockedOn,
+            "reason": audit.reason,
+        }
+    except Exception as e:
+        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
+                    action=f"Unlock {stage}", user_id=ctx.user_id, exc=e)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Time-travel: list versions + restore past version per stage
+# ---------------------------------------------------------------------------
+
+def _po_summary(row) -> str:
+    return f"PO {row.poNo} dated {row.poDate}"
+
+
+def _viability_summary(row) -> str:
+    return f"Viability {row.status}"
+
+
+def _annexure_summary(row) -> str:
+    return f"Annexure {row.status}"
+
+
+def _to_version_item(
+    row, *, entity_id_field: str, summary_fn,
+    parent_field: str,
+) -> dict:
+    """Map a stage row to the uniform StageVersionListItem shape."""
+    return {
+        "entityId": getattr(row, entity_id_field),
+        "versionNo": row.versionNo or 1,
+        "isHead": bool(row.isActive),
+        "status": getattr(row, "status", None),
+        "parentVersionId": getattr(row, parent_field, None),
+        "createdon": row.createdon,
+        "createdby": row.createdby,
+        "summary": summary_fn(row),
+    }
+
+
+@router.get(
+    "/{quot_id}/{stage}/versions",
+    response_model=List[StageVersionListItem],
+)
+def list_stage_versions(
+    quot_id: int,
+    stage: str,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """List every version of the given stage (head + archived) for
+    this quotation. Powers the time-travel dropdown on each stage
+    card. Stage segment matches the canonical Phase-1 vocabulary:
+    ``purchase-order`` / ``viability`` / ``annexure``."""
+    require_permission(MENU, "CanRead", ctx)
+    canonical_stage = lifecycle_service.resolve_stage(stage)
+    if canonical_stage is None:
+        raise HTTPException(404, f"Unknown lifecycle stage: {stage!r}")
+    quot = _get_quot_or_403(db, quot_id, ctx)
+
+    if canonical_stage == lifecycle_service.STAGE_PURCHASE_ORDER:
+        rows = purchase_order_service.list_po_versions(db, quot)
+        return [
+            _to_version_item(
+                r, entity_id_field="quotPOId",
+                parent_field="parentPOId", summary_fn=_po_summary,
+            )
+            for r in rows
+        ]
+    if canonical_stage == lifecycle_service.STAGE_VIABILITY:
+        rows = viability_service.list_viability_versions(db, quot)
+        return [
+            _to_version_item(
+                r, entity_id_field="viabilityId",
+                parent_field="parentViabilityId", summary_fn=_viability_summary,
+            )
+            for r in rows
+        ]
+    if canonical_stage == lifecycle_service.STAGE_ANNEXURE:
+        rows = annexure_service.list_annexure_versions(db, quot)
+        return [
+            _to_version_item(
+                r, entity_id_field="annexureId",
+                parent_field="parentAnnexureId", summary_fn=_annexure_summary,
+            )
+            for r in rows
+        ]
+    # The Quotation stage already has its own /versions endpoint.
+    raise HTTPException(
+        400,
+        "Use GET /quotations/{id}/versions for the Quotation stage.",
+    )
+
+
+@router.post(
+    "/{quot_id}/{stage}/versions/{version_id}/restore",
+    status_code=201,
+)
+def restore_stage_version(
+    quot_id: int,
+    stage: str,
+    version_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Clone an archived version of the given stage forward as a new
+    head. Privileged: requires the matching ``CanUnlockEdit{Stage}``
+    permission so the same role gate as the in-place Unlock-and-Edit
+    escape applies. Side-effects:
+
+    * Current head row → ``isActive = False``.
+    * New row inserted with ``versionNo = MAX + 1``,
+      ``parentXxxId = chain root``, ``status = 'Draft'``, body
+      cloned from the target version.
+    * Sub-rows (PO working sheet / viability lines) are cloned
+      under the new entity id where applicable.
+    """
+    canonical_stage = lifecycle_service.resolve_stage(stage)
+    if canonical_stage is None:
+        raise HTTPException(404, f"Unknown lifecycle stage: {stage!r}")
+    flag = lifecycle_service.STAGE_TO_UNLOCK_FLAG.get(canonical_stage)
+    if flag is None:
+        raise HTTPException(
+            400,
+            "Restore is only available for PurchaseOrder, Viability, and Annexure stages.",
+        )
+
+    try:
+        require_permission(MENU, flag, ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+
+        if canonical_stage == lifecycle_service.STAGE_PURCHASE_ORDER:
+            try:
+                new_row = purchase_order_service.restore_po_version(
+                    db, quot, version_id, user_id=ctx.user_id,
+                )
+            except purchase_order_service.PurchaseOrderConflictError as exc:
+                raise HTTPException(404, str(exc))
+            new_id = new_row.quotPOId
+        elif canonical_stage == lifecycle_service.STAGE_VIABILITY:
+            try:
+                new_row = viability_service.restore_viability_version(
+                    db, quot, version_id, user_id=ctx.user_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+            new_id = new_row.viabilityId
+        elif canonical_stage == lifecycle_service.STAGE_ANNEXURE:
+            try:
+                new_row = annexure_service.restore_annexure_version(
+                    db, quot, version_id, user_id=ctx.user_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(404, str(exc))
+            new_id = new_row.annexureId
+        else:
+            raise HTTPException(400, "Unsupported stage for restore.")
+
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action=f"Restored {canonical_stage} v{getattr(new_row, 'versionNo', '?')}",
+            status=quot.status,
+            user_id=ctx.user_id,
+            details=f"Source version id={version_id}; new entity id={new_id}",
+        )
+        db.commit()
+        db.refresh(new_row)
+        return {
+            "stage": canonical_stage,
+            "newEntityId": new_id,
+            "newVersionNo": new_row.versionNo,
+        }
+    except Exception as e:
+        log_failure(
+            db, quot_id=quot_id, company_id=ctx.company_id,
+            action=f"Restore {stage}", user_id=ctx.user_id, exc=e,
+        )
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Re-source from latest upstream
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{quot_id}/{stage}/re-source",
+    status_code=201,
+)
+def re_source_stage(
+    quot_id: int,
+    stage: str,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Re-source a downstream stage from its current upstream head.
+
+    Use case: an upstream stage moved past the version this stage
+    was sourced from (e.g. quotation Revised after PO captured, PO
+    re-sourced after viability generated, etc.). This archives the
+    current stage head and creates a new version sourced from the
+    current upstream state. Per-stage logic:
+
+    * ``purchase-order``: re-clones the Final Working Sheet from the
+      current quotation's QuotDetails. PO header copied from previous
+      head; user can re-edit and re-Submit.
+    * ``viability``: re-runs the viability generator against the
+      current PO Working Sheet.
+    * ``annexure``: re-runs annexure auto-fill from the current
+      quotation + PO + viability heads.
+
+    Privileged: requires the matching ``CanUnlockEdit{Stage}`` since
+    this changes the head version (same gate as Restore).
+    """
+    canonical_stage = lifecycle_service.resolve_stage(stage)
+    if canonical_stage is None:
+        raise HTTPException(404, f"Unknown lifecycle stage: {stage!r}")
+    flag = lifecycle_service.STAGE_TO_UNLOCK_FLAG.get(canonical_stage)
+    if flag is None or canonical_stage == lifecycle_service.STAGE_QUOTATION:
+        raise HTTPException(
+            400,
+            "Re-source is only available for PurchaseOrder, Viability, and Annexure stages.",
+        )
+
+    try:
+        require_permission(MENU, flag, ctx)
+        quot = _get_quot_or_403(db, quot_id, ctx)
+
+        if canonical_stage == lifecycle_service.STAGE_PURCHASE_ORDER:
+            try:
+                new_row = purchase_order_service.re_source_po_from_quotation(
+                    db, quot, user_id=ctx.user_id,
+                )
+            except purchase_order_service.PurchaseOrderConflictError as exc:
+                raise HTTPException(409, str(exc))
+            new_id = new_row.quotPOId
+        elif canonical_stage == lifecycle_service.STAGE_VIABILITY:
+            new_row = viability_service.re_source_viability_from_po(
+                db, quot, user_id=ctx.user_id,
+            )
+            new_id = new_row.viabilityId
+        else:  # ANNEXURE
+            try:
+                new_row = annexure_service.re_source_annexure_from_upstream(
+                    db, quotation=quot, user_id=ctx.user_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc))
+            new_id = new_row.annexureId
+
+        log_action(
+            db, quot_id=quot.quotId, company_id=quot.companyId,
+            action=f"Re-sourced {canonical_stage} v{getattr(new_row, 'versionNo', '?')}",
+            status=quot.status,
+            user_id=ctx.user_id,
+            details=f"new entity id={new_id}",
+        )
+        db.commit()
+        db.refresh(new_row)
+        return {
+            "stage": canonical_stage,
+            "newEntityId": new_id,
+            "newVersionNo": getattr(new_row, "versionNo", None),
+        }
+    except Exception as e:
+        log_failure(
+            db, quot_id=quot_id, company_id=ctx.company_id,
+            action=f"Re-source {stage}", user_id=ctx.user_id, exc=e,
+        )
         raise
 
 
@@ -946,6 +1716,79 @@ def get_tp_cost(
 
 
 # ===== Quotation Details =====
+
+@router.get("/{quot_id}/purchase-order/working-sheet/export-excel")
+def export_po_working_sheet_excel(
+    quot_id: int,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Download the PO's Final Working Sheet as XLSX. Uses the same
+    formatter as the quotation export (``build_quotation_xlsx``) since
+    the column shape matches QuotDetails — only the header context
+    swaps to the PO's own customer / site / PO No / PO Date."""
+    from fastapi.responses import Response
+    from app.services.quotation_excel_service import build_quotation_xlsx
+    from app.models.customer import CustomerMaster, CustomerSite
+    from app.models.quot_po_working_sheet import QuotPOWorkingSheet
+
+    require_permission(MENU, "CanRead", ctx)
+    quot = _get_quot_or_403(db, quot_id, ctx)
+    require_parent_visible(quot, ctx)
+
+    po = purchase_order_service.get_po(db, quot)
+    if po is None:
+        raise HTTPException(404, "No purchase order on this quotation.")
+
+    # Fetch active working-sheet rows.
+    items = (
+        db.query(QuotPOWorkingSheet)
+        .filter(
+            QuotPOWorkingSheet.quotPOId == po.quotPOId,
+            QuotPOWorkingSheet.isActive == True,  # noqa: E712
+        )
+        .order_by(QuotPOWorkingSheet.poWorkingSheetId.asc())
+        .all()
+    )
+    detail_dicts = [
+        {c.key: getattr(d, c.key, None) for c in d.__table__.columns}
+        for d in items
+    ]
+
+    # Header context — pulled from the PO entity, not the quotation,
+    # so the export reflects what was actually ordered (which can
+    # differ from the quoted side under group-company billing etc.).
+    customer = db.query(CustomerMaster).filter(
+        CustomerMaster.customerId == po.customerId,
+        CustomerMaster.companyId == ctx.company_id,
+    ).first()
+    site = None
+    if po.billingSiteId:
+        site = db.query(CustomerSite).filter(
+            CustomerSite.siteId == po.billingSiteId,
+        ).first()
+
+    xlsx_bytes = build_quotation_xlsx(
+        client_name=customer.customerName if customer else "",
+        site_name=(site.siteAddressCode if site else "") or "",
+        payment_terms="",
+        tp_ref_dia="16",
+        quot_date=po.poDate.strftime("%d-%b-%Y") if po.poDate else "",
+        quot_no=po.poNo or "",
+        details=detail_dicts,
+    )
+
+    safe_no = (po.poNo or f"po-{po.quotPOId}").replace("/", "-").replace("\\", "-")
+    filename = f"{safe_no}-final-working-sheet.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
 
 @router.get("/{quot_id}/details/export-excel")
 def export_quotation_details_excel(

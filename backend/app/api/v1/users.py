@@ -414,7 +414,19 @@ def update_user(
     update_data = data.model_dump(exclude_unset=True)
     report_to_changed = "reportTo" in update_data
 
+    # Defense-in-depth allowlist. The current `UserUpdate` schema only carries
+    # safe profile fields, but a future schema change that adds `companyId`,
+    # `userLogin`, `userPassword`, or `isActive` would silently turn this loop
+    # into a privilege-escalation vector (setattr applies whatever is passed).
+    # Pin the writable surface here so adding new schema fields requires an
+    # explicit decision.
+    _USER_UPDATE_ALLOWED = {
+        "userName", "userCode", "userEmail", "userPhone",
+        "userDesignation", "reportTo",
+    }
     for key, value in update_data.items():
+        if key not in _USER_UPDATE_ALLOWED:
+            continue
         setattr(user, key, value)
     user.lastupdateby = current_user.user_id
 
@@ -484,6 +496,27 @@ def save_user_role_mappings(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    # Verify the target user is one the caller is entitled to manage. Without
+    # this, a CompanyAdmin in tenant A could `POST /users/<B's user>/role-mappings`
+    # and wipe + reassign roles for any user in any tenant just by guessing the
+    # id — `_validate_role_mappings` only checks the *roles being assigned*,
+    # not who they're being assigned to. Mirrors the visibility rule in
+    # `get_user` (own company OR mapped to caller's company).
+    target = db.query(User).filter(User.userId == user_id, User.isActive == True).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not current_user.is_super_admin:
+        is_manageable = (
+            target.companyId == current_user.company_id
+            or db.query(UserRoleMap).filter(
+                UserRoleMap.userId == user_id,
+                UserRoleMap.companyId == current_user.company_id,
+                UserRoleMap.isActive == True,
+            ).first() is not None
+        )
+        if not is_manageable:
+            raise HTTPException(status_code=403, detail="Access denied")
+
     _validate_role_mappings(db, mappings, current_user)
 
     # Deactivate existing

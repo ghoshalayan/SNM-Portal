@@ -1,13 +1,26 @@
+/* Host fills its parent as a flex item. The parent (page panel-wrap
+   or dashboard drawer-body) is a flex column container with a
+   definite flex-determined height; this host takes ``flex: 1`` of
+   that. Tested across nested grid+flex layouts: this is the most
+   reliable shape because the host itself is a flex item AND a flex
+   container, so the inner ``.chat-panel`` (flex:1) can size from
+   the host's definite flex size without going through ``height:100%``
+   resolution on a grid item. */
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
 .chat-panel {
   display: grid;
   grid-template-columns: 280px 1fr;
-  /* Fill whatever bounded box the host gives us — the page or drawer
-     above is responsible for capping the height. ``min-height: 0`` is
-     required so this grid node doesn't itself stretch when its
-     contents overflow. */
-  height: 100%;
-  width: 100%;
+  grid-template-rows: minmax(0, 1fr);  // explicit minmax avoids row auto-sizing
+  flex: 1 1 0;                         // fill the flex-column host
   min-height: 0;
+  min-width: 0;
   background: var(--snm-bg-card, #fff);
   border-radius: 8px;
   overflow: hidden;
@@ -60,14 +73,16 @@
 .empty { color: var(--snm-text-muted); padding: 16px; font-size: 0.85rem; text-align: center; }
 
 /* Conversation column is a flex container — header (fixed), messages
-   (scrollable), composer (fixed). ``min-height: 0`` is the critical
-   bit: without it, ``.messages`` flex: 1 with overflow-y: auto can't
-   shrink below its content size, so the whole panel grows and the
-   page itself scrolls instead of the messages list. */
+   (scrollable), composer (fixed). Default grid item ``align-self:
+   stretch`` already fills the row height, so we don't need explicit
+   ``height: 100%`` (which was unreliable on grid items in some
+   layouts). ``min-height: 0`` is critical so ``.messages`` can
+   shrink below its content size — without it the whole panel grows
+   and the composer falls outside the visible area. */
 .conversation {
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0;
-  height: 100%;
+  overflow: hidden;
 }
 .conv-head {
   flex: 0 0 auto;
@@ -119,6 +134,25 @@
   &.failed {
     border-color: var(--snm-error, #e53935);
     background: rgba(229, 57, 53, 0.05);
+  }
+  /* Clarify turn — Planner is asking the user a question. Warm-amber
+     left rail and tinted background distinguishes it from a normal
+     answer turn at a glance. */
+  &.clarify {
+    border-left: 3px solid #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+    .msg-head .role-icon { color: #d97706; }
+  }
+}
+/* When the recommendations row sits inside a clarify turn it's labelled
+   "Tap to answer" rather than "Suggested next steps" — give the chips a
+   stronger affordance so the user actually reads them as one-tap reply
+   buttons. */
+.recommendations.clarify-options {
+  .rec-label mat-icon { color: #d97706; }
+  ::ng-deep .mat-mdc-chip-option {
+    background: rgba(245, 158, 11, 0.12) !important;
+    border: 1px solid rgba(245, 158, 11, 0.4) !important;
   }
 }
 .msg-head {
@@ -375,6 +409,13 @@
    up-arrow) → pending (stop icon while a turn is in flight). */
 .composer {
   flex: 0 0 auto;
+  /* Sticky-bottom belt-and-suspenders: even if the .conversation
+     column doesn't get a definite height (flex/grid quirk in some
+     browsers), the composer stays pinned to the bottom of the
+     visible scroll area instead of being pushed off-screen. */
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   padding: 14px 16px 12px;
   border-top: 1px solid var(--snm-border-divider, #e0e0e0);
   background: var(--snm-bg-card, #fff);

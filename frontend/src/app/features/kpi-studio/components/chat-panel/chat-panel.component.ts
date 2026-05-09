@@ -418,6 +418,15 @@ export class ChatPanelComponent implements OnInit, AfterViewChecked {
 
   /** Concise step label for the agent timeline. */
   stepLabel(s: NlAgentStep): string {
+    // Pre-flight Planner / Resolver steps — the user sees these first.
+    if (s.type === 'planner_question') return 'Planner — checking scope';
+    if (s.type === 'resolver_answer') {
+      if (s.tool === 'lookup_domain') return 'Resolver — Knowledge Hub lookup';
+      if (s.tool === 'find_table')    return 'Resolver — schema lookup';
+      if (s.tool === 'find_column')   return 'Resolver — column lookup';
+      if (s.tool === 'finalize')      return 'Planner — verdict';
+      return 'Resolver';
+    }
     if (s.tool) return this.humaniseTool(s.tool);
     if (s.type === 'thought') return 'Reasoning';
     if (s.type === 'final')   return 'Final answer';
@@ -428,6 +437,14 @@ export class ChatPanelComponent implements OnInit, AfterViewChecked {
   /** Material icon name that matches the step kind. Same icon set the
    *  rest of the app already uses; no extra dependencies. */
   stepIcon(s: NlAgentStep): string {
+    if (s.type === 'planner_question') return 'troubleshoot';
+    if (s.type === 'resolver_answer') {
+      if (s.tool === 'lookup_domain') return 'menu_book';
+      if (s.tool === 'find_table')    return 'table_view';
+      if (s.tool === 'find_column')   return 'view_column';
+      if (s.tool === 'finalize')      return 'fact_check';
+      return 'search';
+    }
     if (s.type === 'tool_error') return 'error_outline';
     if (s.type === 'thought')    return 'psychology';
     if (s.type === 'final')      return 'check_circle';
@@ -464,6 +481,9 @@ export class ChatPanelComponent implements OnInit, AfterViewChecked {
     const steps = this.liveSteps();
     if (steps.length === 0) return 'Agent is thinking…';
     const last = steps[steps.length - 1];
+    if (last.type === 'planner_question') return 'Planner is checking the question…';
+    if (last.type === 'resolver_answer' && last.tool === 'finalize') return 'Planning the query…';
+    if (last.type === 'resolver_answer') return 'Reading context…';
     if (last.type === 'final') return 'Wrapping up…';
     if (last.type === 'abort') return 'Stopping…';
     if (last.tool === 'propose_sql') return 'Validating SQL…';

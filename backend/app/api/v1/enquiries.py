@@ -268,6 +268,15 @@ def create_enquiry(
 
     # F7: Auto-generate enqNo with retry on filtered-unique collision.
     user_supplied_enq_no = data_dict.get("enqNo")
+    # Manual override of the auto-generated FY-scoped enquiry number is
+    # privileged — same rationale as the quotation create handler.
+    # ``CanEditNumber`` gates it; migration ``v3w4x5y6z7a8`` backfills
+    # the flag from ``CanAdd`` so existing roles aren't broken.
+    if user_supplied_enq_no and not ctx.has_permission(MENU, "CanEditNumber"):
+        raise HTTPException(
+            403,
+            "You do not have permission to override the auto-generated enquiry number.",
+        )
     fy_code: Optional[str] = None
     if not user_supplied_enq_no:
         fy = db.query(FinancialYear).filter(
@@ -298,11 +307,19 @@ def create_enquiry(
         )
 
     from app.services.number_allocator import allocate_and_flush
+    # C2: same applock pattern as quotations — serialize the count+insert
+    # per (company, owner-userCode, fy) so concurrent enquiry-create can't
+    # hand out duplicate numbers. User-supplied numbers skip the lock.
+    _alloc_lock_key = (
+        None if user_supplied_enq_no
+        else f"NUM:ENQ:{ctx.company_id}:{owner['userCode']}:{fy_code}"
+    )
     enq = allocate_and_flush(
         db,
         build=_build_enq,
         compute_number=_next_enq_no,
         max_attempts=1 if user_supplied_enq_no else 10,
+        lock_key=_alloc_lock_key,
         conflict_message=(
             "Enquiry number already exists — choose a different one."
             if user_supplied_enq_no

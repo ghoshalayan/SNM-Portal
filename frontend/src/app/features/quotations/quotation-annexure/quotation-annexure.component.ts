@@ -16,6 +16,10 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
+import { MenuService } from '../../../core/services/menu.service';
+import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
+import { VersionSelectorComponent } from '../version-selector/version-selector.component';
+import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
 import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialog/confirm-dialog.component';
 
 export interface DiaBreakupEntry {
@@ -29,6 +33,8 @@ export interface Annexure {
   quotId: number;
   viabilityId?: number | null;
   status: 'Draft' | 'Approved';
+  parentAnnexureId?: number | null;
+  versionNo?: number;
 
   clientName?: string;
   customerPONo?: string;
@@ -69,6 +75,10 @@ export interface Annexure {
   checkedByName?: string;
   approvedByName?: string;
   approvedon?: string;
+
+  /** Addressee printed on the annexure ("To:" line). Editable on the
+   *  form; backfilled with the legacy hardcoded value for older rows. */
+  addressedTo?: string;
 }
 
 @Component({
@@ -79,48 +89,71 @@ export interface Annexure {
     MatCardModule, MatButtonModule, MatIconModule, MatFormFieldModule,
     MatInputModule, MatSelectModule, MatDatepickerModule, MatNativeDateModule,
     MatProgressSpinnerModule, MatTooltipModule, MatDialogModule,
+    VersionSelectorComponent,
+    StaleBannerComponent,
   ],
   template: `
-    <mat-card class="ann-card">
-      <mat-card-header>
-        <mat-card-title>
-          <mat-icon class="ann-icon">description</mat-icon>
-          Annexure-A
+    <mat-card class="stage-card ann-card">
+      <div class="stage-card-head">
+        <div class="stage-card-head-left">
+          <mat-icon class="stage-card-head-icon">description</mat-icon>
+          <div class="stage-card-head-text">
+            <div class="stage-card-head-title">
+              Annexure-A
+              @if (annexure) {
+                <span class="stage-status-chip" [class.is-approved]="annexure.status === 'Approved'">
+                  {{ annexure.status }}
+                </span>
+                <app-version-selector
+                  [quotId]="quotId"
+                  stage="annexure"
+                  [headVersion]="annexure.versionNo || 1"
+                  [canRestore]="canUnlockEditAnnexure"
+                  (restored)="stageChanged.emit()">
+                </app-version-selector>
+              }
+            </div>
+            <div class="stage-card-head-meta">
+              Structured document attached to the matured PO · auto-filled from quotation + viability
+            </div>
+          </div>
+        </div>
+        <div class="stage-card-head-actions">
           @if (annexure) {
-            <span class="ann-status" [class.approved]="annexure.status === 'Approved'">
-              {{ annexure.status }}
-            </span>
-          }
-        </mat-card-title>
-        <mat-card-subtitle>
-          Structured document attached to the matured PO · auto-filled from quotation + viability
-        </mat-card-subtitle>
-        <span class="ann-spacer"></span>
-
-        @if (annexure) {
-          <button mat-stroked-button (click)="openPrint()">
-            <mat-icon>print</mat-icon> Print
-          </button>
-          <!-- Save: enabled while editing is allowed (Draft for everyone,
-               Approved-too for Commercial HODs via canApproveAnnexure). -->
-          @if (!isLocked) {
-            <button mat-raised-button color="primary" (click)="save()" [disabled]="saving">
-              <mat-icon>save</mat-icon> Save
+            <button mat-stroked-button (click)="openPrint()">
+              <mat-icon>print</mat-icon> Print
             </button>
+            @if (!isLocked) {
+              <button mat-raised-button color="primary" (click)="save()" [disabled]="saving">
+                <mat-icon>save</mat-icon> Save
+              </button>
+            }
+            @if (annexure.status === 'Draft' && canApproveAnnexure) {
+              <button mat-raised-button color="accent" (click)="approve()" [disabled]="saving">
+                <mat-icon>verified</mat-icon> Approve
+              </button>
+            }
+            @if (annexure.status === 'Approved' && canUnlockEditAnnexure) {
+              <button mat-stroked-button color="warn" (click)="openUnlockDialog()" [disabled]="saving"
+                matTooltip="Privileged: unlock this approved annexure for in-place edits (audited)">
+                <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
+              </button>
+            }
           }
-          <!-- Approve: only the Commercial HOD (canApproveAnnexure) can
-               sign off, and only on a Draft annexure. Once Approved
-               there's no re-approve flow — Commercial HOD can keep
-               editing but the status stays Approved. -->
-          @if (annexure.status === 'Draft' && canApproveAnnexure) {
-            <button mat-raised-button color="accent" (click)="approve()" [disabled]="saving">
-              <mat-icon>verified</mat-icon> Approve
-            </button>
-          }
-        }
-      </mat-card-header>
+        </div>
+      </div>
 
       <mat-card-content>
+        <app-stale-banner
+          *ngIf="annexure"
+          [stale]="isAnnexureStale()"
+          stageLabel="Annexure"
+          title="Annexure is stale relative to upstream"
+          [message]="annexureStaleMessage()"
+          [canResource]="canUnlockEditAnnexure"
+          [busy]="resourcing"
+          (resource)="reSource.emit()">
+        </app-stale-banner>
         @if (loading) {
           <div class="ann-spinner"><mat-spinner diameter="40"></mat-spinner></div>
         } @else if (!annexure) {
@@ -337,16 +370,43 @@ export interface Annexure {
               }
             </section>
 
-            <!-- 25: Remarks -->
+            <!-- 25: Remarks — wrapped in .ann-grid so the .ann-wide
+                 class (grid-column 1/-1) actually spans the full form
+                 width. Without the grid context the form field falls
+                 back to its narrow intrinsic width. -->
             <section class="ann-section">
               <h3>25. Remarks</h3>
-              <mat-form-field appearance="outline" class="ann-wide">
-                <mat-label>Remarks</mat-label>
-                <textarea matInput rows="3" [(ngModel)]="annexure.remarks" name="remarks" [disabled]="isLocked"></textarea>
-              </mat-form-field>
+              <div class="ann-grid">
+                <mat-form-field appearance="outline" class="ann-wide">
+                  <mat-label>Remarks</mat-label>
+                  <textarea matInput rows="3" [(ngModel)]="annexure.remarks" name="remarks" [disabled]="isLocked"></textarea>
+                </mat-form-field>
+              </div>
             </section>
 
-            <!-- Signatures -->
+            <!-- Letterhead controls the "From" and "To" lines
+                 printed above the body table. The Prepared-By name
+                 doubles as the From signature. -->
+            <section class="ann-section">
+              <h3>Letterhead</h3>
+              <div class="ann-grid">
+                <mat-form-field appearance="outline">
+                  <mat-label>From (KRO Name)</mat-label>
+                  <input matInput [(ngModel)]="annexure.preparedByName"
+                         name="fromName" [disabled]="isLocked" />
+                </mat-form-field>
+                <mat-form-field appearance="outline" class="ann-wide">
+                  <mat-label>To (Addressee)</mat-label>
+                  <input matInput [(ngModel)]="annexure.addressedTo"
+                         name="addressedTo" [disabled]="isLocked"
+                         placeholder="Mr. A. Chaudhuri / Mrs. S. Basu Sengupta" />
+                </mat-form-field>
+              </div>
+            </section>
+
+            <!-- Signatures — Prepared mirrors the From line above
+                 (single source of truth); Checked & Approved are
+                 separate signers captured at sign-off time. -->
             <section class="ann-section">
               <h3>Signatures</h3>
               <div class="ann-grid">
@@ -370,29 +430,9 @@ export interface Annexure {
     </mat-card>
   `,
   styles: [`
-    .ann-card { margin-top: 20px; }
-    .ann-card mat-card-title {
-      display: flex; align-items: center; gap: 8px; font-size: 18px;
-    }
-    .ann-icon { color: var(--snm-accent-dark, #3a6bb5); }
-    .ann-status {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 600;
-      background: rgba(158,158,158,0.15);
-      color: var(--snm-text-secondary);
-      border: 1px solid rgba(158,158,158,0.3);
-    }
-    .ann-status.approved {
-      background: rgba(46,125,50,0.15);
-      color: #4caf50;
-      border-color: rgba(46,125,50,0.3);
-    }
-    mat-card-header { display: flex; align-items: center; flex-wrap: wrap; }
-    mat-card-header button { margin-left: 6px; }
-    .ann-spacer { flex: 1; }
+    /* Card chrome (head strip, status chip, action cluster) is shared
+       across all four lifecycle stage cards via the stage-card classes
+       in styles.scss. Only the annexure-specific bits live here. */
     .ann-spinner { display: flex; justify-content: center; padding: 40px 0; }
     .ann-empty {
       text-align: center; padding: 40px 20px;
@@ -455,6 +495,21 @@ export class QuotationAnnexureComponent implements OnChanges {
    *       an annexure even after status = Approved. */
   @Input() canApproveAnnexure = false;
   @Input() readOnly = false;
+  // Phase 1 Unlock-and-Edit flag for the Annexure stage. Resolved
+  // from the menu service in the constructor. Distinct from
+  // ``canApproveAnnexure``: that flag has historically also let
+  // Commercial HODs edit approved annexures (pre-Phase-1 escape
+  // valve); the new flag is the formal per-stage Unlock pattern and
+  // also writes a LifecycleUnlockAudit row.
+  canUnlockEditAnnexure = false;
+  // Phase 3 — current upstream head versions. Annexure auto-fills
+  // from quotation + PO + viability, so it watches all three.
+  @Input() upstreamQuotationVersion: number | null = null;
+  @Input() upstreamPoVersion: number | null = null;
+  @Input() upstreamViabilityVersion: number | null = null;
+  @Input() resourcing = false;
+  /** Fires when the user clicks Re-source on the stale banner. */
+  @Output() reSource = new EventEmitter<void>();
 
   /** Fires after generate / approve so the parent quotation-form can re-sync
    * its status, stepper, and tab locks without a page refresh. */
@@ -480,7 +535,12 @@ export class QuotationAnnexureComponent implements OnChanges {
     private dialog: MatDialog,
     private router: Router,
     private location: Location,
-  ) {}
+    private menuService: MenuService,
+  ) {
+    this.canUnlockEditAnnexure = this.menuService.hasPermission(
+      'Quotations', 'canUnlockEditAnnexure',
+    );
+  }
 
   ngOnChanges(c: SimpleChanges): void {
     if (c['quotId']?.currentValue) this.load();
@@ -560,6 +620,87 @@ export class QuotationAnnexureComponent implements OnChanges {
           this.notify.error(e?.error?.detail || 'Approval failed.');
         },
       });
+    });
+  }
+
+  /** Phase 3 staleness — annexure auto-fills from three upstream
+   *  sources, so it's stale when any of the stamped versions is
+   *  older than the matching head. */
+  isAnnexureStale(): boolean {
+    if (!this.annexure) return false;
+    const a = this.annexure as any;
+    if (
+      this.upstreamQuotationVersion != null
+      && a.sourcedFromQuotationVersion != null
+      && a.sourcedFromQuotationVersion < this.upstreamQuotationVersion
+    ) return true;
+    if (
+      this.upstreamPoVersion != null
+      && a.sourcedFromPOVersion != null
+      && a.sourcedFromPOVersion < this.upstreamPoVersion
+    ) return true;
+    if (
+      this.upstreamViabilityVersion != null
+      && a.sourcedFromViabilityVersion != null
+      && a.sourcedFromViabilityVersion < this.upstreamViabilityVersion
+    ) return true;
+    return false;
+  }
+
+  annexureStaleMessage(): string {
+    if (!this.annexure) return '';
+    const a = this.annexure as any;
+    const parts: string[] = [];
+    if (
+      this.upstreamQuotationVersion != null
+      && a.sourcedFromQuotationVersion != null
+      && a.sourcedFromQuotationVersion < this.upstreamQuotationVersion
+    ) {
+      parts.push(
+        `Quotation v${a.sourcedFromQuotationVersion} → v${this.upstreamQuotationVersion}`,
+      );
+    }
+    if (
+      this.upstreamPoVersion != null
+      && a.sourcedFromPOVersion != null
+      && a.sourcedFromPOVersion < this.upstreamPoVersion
+    ) {
+      parts.push(
+        `PO v${a.sourcedFromPOVersion} → v${this.upstreamPoVersion}`,
+      );
+    }
+    if (
+      this.upstreamViabilityVersion != null
+      && a.sourcedFromViabilityVersion != null
+      && a.sourcedFromViabilityVersion < this.upstreamViabilityVersion
+    ) {
+      parts.push(
+        `Viability v${a.sourcedFromViabilityVersion} → v${this.upstreamViabilityVersion}`,
+      );
+    }
+    return (
+      `Out of date: ${parts.join('; ')}. ` +
+      `Re-source to regenerate the annexure from current upstream heads.`
+    );
+  }
+
+  /** Privileged Unlock-and-Edit on the annexure. Opens the shared
+   *  reason-prompt dialog; on success the audit row is written and
+   *  the parent re-fetches so locked-state UI clears. */
+  openUnlockDialog(): void {
+    if (!this.annexure) return;
+    const ref = this.dialog.open(LifecycleUnlockDialogComponent, {
+      data: {
+        quotationId: this.quotId,
+        stage: 'annexure',
+        stageLabel: 'Annexure',
+      },
+      width: '560px',
+      maxWidth: '95vw',
+      disableClose: true,
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.stageChanged.emit();
     });
   }
 

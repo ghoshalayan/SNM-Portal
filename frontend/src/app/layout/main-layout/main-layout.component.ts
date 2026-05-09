@@ -17,6 +17,8 @@ import { DynamicMenuComponent } from '../../shared/components/dynamic-menu/dynam
 import { CompanySwitcherComponent } from '../../shared/components/company-switcher/company-switcher.component';
 import { SkeletonLoaderComponent } from '../../shared/components/skeleton-loader/skeleton-loader.component';
 import { ProfileDialogComponent } from '../../shared/components/profile-menu/profile-dialog.component';
+import { TutorialDialogComponent } from '../../features/tutorials/tutorial-dialog.component';
+import { TutorialId } from '../../features/tutorials/tutorial-content';
 
 @Component({
   selector: 'app-main-layout',
@@ -90,6 +92,15 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
         roleName: user.roleName,
         isSuperAdmin: user.isSuperAdmin,
       },
+    });
+  }
+
+  openTutorial(id: TutorialId): void {
+    this.dialog.open(TutorialDialogComponent, {
+      width: '720px',
+      maxWidth: '95vw',
+      autoFocus: false,
+      data: { id },
     });
   }
 

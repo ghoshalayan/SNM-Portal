@@ -23,14 +23,28 @@ class LocalStorageService:
             "file_name": original_filename,
         }
 
+    def _resolve_inside_base(self, blob_name: str) -> Path:
+        """Resolve `blob_name` under `base_path` and refuse anything that
+        escapes it. Defends against a tampered `Asset.fileUrl` containing
+        `../` or an absolute path — uploads only ever write UUID names, but
+        downloads trust the DB-stored URL, so this is the choke point.
+        """
+        base = self.base_path.resolve()
+        candidate = (self.base_path / blob_name).resolve()
+        try:
+            candidate.relative_to(base)
+        except ValueError:
+            raise FileNotFoundError(f"File not found: {blob_name}")
+        return candidate
+
     def download_file(self, blob_name: str) -> bytes:
-        file_path = self.base_path / blob_name
+        file_path = self._resolve_inside_base(blob_name)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {blob_name}")
         return file_path.read_bytes()
 
     def delete_file(self, blob_name: str) -> None:
-        file_path = self.base_path / blob_name
+        file_path = self._resolve_inside_base(blob_name)
         if file_path.exists():
             os.remove(file_path)
 

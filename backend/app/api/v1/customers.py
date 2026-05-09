@@ -11,6 +11,7 @@ from app.schemas.customer import (
     CustomerContactCreate, CustomerContactResponse,
     CustomerSiteCreate, CustomerSiteResponse,
 )
+from app.schemas.quot_purchase_order import AdHocSiteCreate
 from app.services.access_service import (
     AccessContext, get_access_context,
     apply_company_filter,
@@ -391,6 +392,14 @@ def delete_contact(
 @router.get("/{customer_id}/sites", response_model=List[CustomerSiteResponse])
 def get_sites(
     customer_id: int,
+    includeAdHoc: bool = Query(
+        False,
+        description=(
+            "Include sites flagged isAdHoc=True (created from the PO "
+            "manual-address flow). Default False so the regular site "
+            "picker stays clean."
+        ),
+    ),
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
@@ -400,6 +409,8 @@ def get_sites(
         CustomerSite.companyId == ctx.company_id,
         CustomerSite.isActive == True,
     )
+    if not includeAdHoc:
+        q = q.filter(CustomerSite.isAdHoc == False)  # noqa: E712 — SQL Server compat
     loc_filter = ctx.location.build_sql_filter(CustomerSite.state, CustomerSite.dist)
     if loc_filter is False:
         return []
@@ -421,6 +432,55 @@ def create_site(
         **data.model_dump(),
         customerId=customer_id,
         companyId=ctx.company_id,
+        createdby=ctx.user_id,
+    )
+    db.add(site)
+    db.commit()
+    db.refresh(site)
+    return site
+
+
+@router.post(
+    "/{customer_id}/sites/ad-hoc",
+    response_model=CustomerSiteResponse,
+    status_code=201,
+)
+def create_ad_hoc_site(
+    customer_id: int,
+    data: AdHocSiteCreate,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Create a CustomerSite from the PO dialog's "save permanently"
+    flow. Stamped ``isAdHoc=False`` so it surfaces in the standard
+    site picker and Customer → Sites tab — same shape as a regular
+    New Site, just created from a different entry point. Same RBAC
+    as a regular site create."""
+    _perm(ctx, MENU_SITE, MENU_CUSTOMER, "CanAdd")
+    require_location_access(data.state, data.dist, ctx)
+    payload = data.model_dump()
+    if not payload.get("siteAddressCode"):
+        cust = db.query(CustomerMaster).filter(
+            CustomerMaster.customerId == customer_id,
+            CustomerMaster.companyId == ctx.company_id,
+            CustomerMaster.isActive == True,  # noqa: E712 — SQL Server compat
+        ).first()
+        customer_code = (cust.customerCode or "").strip() if cust else ""
+        existing_count = db.query(CustomerSite).filter(
+            CustomerSite.customerId == customer_id,
+            CustomerSite.companyId == ctx.company_id,
+            CustomerSite.isActive == True,  # noqa: E712
+        ).count()
+        if customer_code:
+            payload["siteAddressCode"] = (
+                customer_code if existing_count == 0
+                else f"{customer_code}/{existing_count}"
+            )
+    site = CustomerSite(
+        **payload,
+        customerId=customer_id,
+        companyId=ctx.company_id,
+        isAdHoc=False,
         createdby=ctx.user_id,
     )
     db.add(site)

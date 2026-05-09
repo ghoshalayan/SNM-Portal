@@ -26,6 +26,16 @@ export interface MenuPermissionMap {
      *  approval and lets the holder edit annexures even after they
      *  are approved (override of the regular post-approval lock). */
     canApproveAnnexure: boolean;
+    // ----- Phase 1 lifecycle flags. Only meaningful on Quotations. -----
+    canConvert: boolean;
+    canReactivate: boolean;
+    canSubmitPO: boolean;
+    canRejectPO: boolean;
+    canApproveViability: boolean;
+    canUnlockEditQuotation: boolean;
+    canUnlockEditPO: boolean;
+    canUnlockEditViability: boolean;
+    canUnlockEditAnnexure: boolean;
   };
 }
 
@@ -69,6 +79,16 @@ export class MenuService {
             canTransferOwnership: p.canTransferOwnership || false,
             canGenerateUnderOthers: p.canGenerateUnderOthers || false,
             canApproveAnnexure: p.canApproveAnnexure || false,
+            // Phase 1 lifecycle flags
+            canConvert: p.canConvert || false,
+            canReactivate: p.canReactivate || false,
+            canSubmitPO: p.canSubmitPO || false,
+            canRejectPO: p.canRejectPO || false,
+            canApproveViability: p.canApproveViability || false,
+            canUnlockEditQuotation: p.canUnlockEditQuotation || false,
+            canUnlockEditPO: p.canUnlockEditPO || false,
+            canUnlockEditViability: p.canUnlockEditViability || false,
+            canUnlockEditAnnexure: p.canUnlockEditAnnexure || false,
           };
         }
       }),

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -43,6 +43,15 @@ class MenuTreeNode(BaseModel):
 
 
 class RoleMenuPermission(BaseModel):
+    # Reject unknown flag names. The save handler relies on
+    # ``model_dump(exclude_unset=True)`` to detect which flags the caller
+    # actually sent; a typo like ``canConvret: true`` must NOT silently
+    # be dropped by Pydantic's "ignore-extras" default — it would look
+    # like the flag was simply omitted, leaving the real ``canConvert``
+    # untouched, which is the same silent-failure shape we just fixed.
+    # Forbid raises 422 instead, making the bug loud at the API edge.
+    model_config = ConfigDict(extra="forbid")
+
     menuId: int
     canAdd: bool = False
     canRead: bool = False
@@ -54,6 +63,16 @@ class RoleMenuPermission(BaseModel):
     canTransferOwnership: bool = False
     canGenerateUnderOthers: bool = False
     canApproveAnnexure: bool = False
+    # Phase 1 lifecycle flags. Only meaningful on the Quotations menu.
+    canConvert: bool = False
+    canReactivate: bool = False
+    canSubmitPO: bool = False
+    canRejectPO: bool = False
+    canApproveViability: bool = False
+    canUnlockEditQuotation: bool = False
+    canUnlockEditPO: bool = False
+    canUnlockEditViability: bool = False
+    canUnlockEditAnnexure: bool = False
 
 
 class RoleMenuPermissionResponse(BaseModel):
@@ -69,6 +88,16 @@ class RoleMenuPermissionResponse(BaseModel):
     canTransferOwnership: bool = False
     canGenerateUnderOthers: bool = False
     canApproveAnnexure: bool = False
+    # Phase 1 lifecycle flags. Only meaningful on the Quotations menu.
+    canConvert: bool = False
+    canReactivate: bool = False
+    canSubmitPO: bool = False
+    canRejectPO: bool = False
+    canApproveViability: bool = False
+    canUnlockEditQuotation: bool = False
+    canUnlockEditPO: bool = False
+    canUnlockEditViability: bool = False
+    canUnlockEditAnnexure: bool = False
 
     class Config:
         from_attributes = True

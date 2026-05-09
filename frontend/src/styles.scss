@@ -1357,6 +1357,136 @@ mat-card:has(app-server-search-select .sss-root.is-open),
 .mat-mdc-dialog-content { padding-top: 12px !important; }
 
 
+// ----- Lifecycle Stage Cards -----
+// Shared visual shell for the four lifecycle stage cards: Quotation,
+// Purchase Order, Viability, Annexure. They all share the same head
+// strip (accent-tinted gradient + icon + title + meta + status chip +
+// action button cluster) so the workspace reads as a coherent ladder
+// rather than four bespoke widgets. Components inside the body still
+// own their own content classes — only the chrome is unified.
+.stage-card {
+  margin-top: 20px;
+  padding: 0;
+  overflow: hidden;
+}
+.stage-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(
+    90deg,
+    rgba(58, 107, 181, 0.08),
+    rgba(58, 107, 181, 0.02)
+  );
+  border-bottom: 1px solid var(--snm-border-divider, rgba(0,0,0,0.08));
+  flex-wrap: wrap;
+}
+.stage-card-head-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.stage-card-head-icon {
+  font-size: 30px;
+  width: 30px;
+  height: 30px;
+  color: var(--snm-accent-dark, #3a6bb5);
+  flex-shrink: 0;
+}
+.stage-card-head-text { min-width: 0; }
+.stage-card-head-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--snm-text-primary, #1a1a1a);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.stage-card-head-meta {
+  font-size: 13px;
+  color: var(--snm-text-secondary, rgba(0,0,0,0.65));
+  margin-top: 2px;
+}
+.stage-card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.stage-card-body {
+  padding: 18px 22px;
+}
+
+// Status chip — neutral grey by default, green when approved/done.
+.stage-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  background: rgba(158, 158, 158, 0.18);
+  color: var(--snm-text-secondary, rgba(0,0,0,0.6));
+  border: 1px solid rgba(158, 158, 158, 0.3);
+}
+.stage-status-chip.is-approved {
+  background: rgba(46, 125, 50, 0.15);
+  color: #4caf50;
+  border-color: rgba(46, 125, 50, 0.3);
+}
+.stage-status-chip.is-locked {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--snm-text-muted, rgba(0,0,0,0.6));
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.stage-status-chip.is-warn {
+  background: rgba(198, 40, 40, 0.12);
+  color: #c62828;
+  border-color: rgba(198, 40, 40, 0.3);
+}
+.stage-status-chip mat-icon {
+  font-size: 14px;
+  width: 14px;
+  height: 14px;
+}
+
+// Per-stage version pill. Reads the stage entity's ``versionNo`` and
+// displays it as a small chip next to the title. Static in Phase 1
+// (all existing rows are v1 after the migration); becomes a clickable
+// dropdown for time-travel in Phase 2.
+.stage-version-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: rgba(58, 107, 181, 0.10);
+  color: var(--snm-accent-dark, #3a6bb5);
+  border: 1px solid rgba(58, 107, 181, 0.22);
+}
+.stage-version-pill mat-icon {
+  font-size: 12px; width: 12px; height: 12px;
+  opacity: 0.85;
+}
+
+@media (max-width: 768px) {
+  .stage-card-head { padding: 14px 16px; }
+  .stage-card-body { padding: 16px; }
+  .stage-card-head-actions { margin-left: 0; width: 100%; }
+}
+
+
 // ===== Print: hide everything except document content =====
 @media print {
   // Hide sidebar, toolbar, overlay backdrop, and animated blobs

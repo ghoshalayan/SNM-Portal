@@ -538,7 +538,14 @@ export interface NlGenerateRequest {
 }
 
 export interface NlAgentStep {
-  type: 'tool_call' | 'tool_error' | 'thought' | 'final' | 'abort';
+  /** Step kinds:
+   *   tool_call / tool_error / thought / final / abort  - SQL agent
+   *   planner_question / resolver_answer                - Pre-flight loop
+   * Both sources stream through the same SSE channel; the chat panel
+   * renders them with different icons but the same timeline UI. */
+  type:
+    | 'tool_call' | 'tool_error' | 'thought' | 'final' | 'abort'
+    | 'planner_question' | 'resolver_answer';
   tool?: string | null;
   args?: Record<string, any> | null;
   output?: any;
@@ -607,10 +614,21 @@ export interface SettingsTestResult {
 
 export type ChatRole = 'user' | 'assistant';
 
+/** Discriminator for the *kind* of assistant turn:
+ *   'answer'  - canonical successful query turn (default for all
+ *               existing/legacy data and the happy path).
+ *   'clarify' - Pre-flight Planner asking the user a follow-up
+ *               question. ``content`` holds the question; no
+ *               sql/chart/insight; ``recommendations`` carries the
+ *               suggested-options chips for one-tap replies.
+ * Future variants ('reject', 'plan', etc.) reuse the same column. */
+export type ChatMessageKind = 'answer' | 'clarify';
+
 export interface ChatMessage {
   chat_message_id: number;
   chat_session_id: number;
   role: ChatRole;
+  kind?: ChatMessageKind;
   content: string;
   // Assistant-only fields:
   sql?: string | null;

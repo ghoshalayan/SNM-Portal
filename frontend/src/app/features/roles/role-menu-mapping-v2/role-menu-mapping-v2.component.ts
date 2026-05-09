@@ -296,6 +296,13 @@ export class RoleMenuMappingV2Component implements OnInit {
     if (!this.settings || this.saving) return;
     this.saving = true;
 
+    // Backend's Pydantic ``RoleMenuPermission`` defaults every field to
+    // false, so any flag NOT in this payload silently resets to false on
+    // save — even if the user just toggled it. Round-trip every flag the
+    // backend knows about. The matrix component is schema-driven, so flags
+    // the current company doesn't surface still reach us via the GET (and
+    // we send them back unchanged), keeping data intact across role pages
+    // that render different subsets.
     const permPayload = this.flatPermissions.map(p => ({
       menuId: p.menuId,
       canAdd: !!p.canAdd,
@@ -307,10 +314,16 @@ export class RoleMenuMappingV2Component implements OnInit {
       canRevise: !!p.canRevise,
       canTransferOwnership: !!p.canTransferOwnership,
       canGenerateUnderOthers: !!p.canGenerateUnderOthers,
-      // Backend's Pydantic model defaults missing fields to false, so
-      // omitting this from the payload silently *unsets* whatever the
-      // user had toggled. Any new extended flag must round-trip here.
       canApproveAnnexure: !!p.canApproveAnnexure,
+      canConvert: !!p.canConvert,
+      canReactivate: !!p.canReactivate,
+      canSubmitPO: !!p.canSubmitPO,
+      canRejectPO: !!p.canRejectPO,
+      canApproveViability: !!p.canApproveViability,
+      canUnlockEditQuotation: !!p.canUnlockEditQuotation,
+      canUnlockEditPO: !!p.canUnlockEditPO,
+      canUnlockEditViability: !!p.canUnlockEditViability,
+      canUnlockEditAnnexure: !!p.canUnlockEditAnnexure,
     }));
 
     forkJoin({
@@ -397,6 +410,17 @@ export class RoleMenuMappingV2Component implements OnInit {
         target.canTransferOwnership = copied.canTransferOwnership;
         target.canGenerateUnderOthers = copied.canGenerateUnderOthers;
         target.canApproveAnnexure = copied.canApproveAnnexure;
+        // Phase-1 lifecycle flags — must be carried along, otherwise
+        // "Copy from" silently resets them on the destination role.
+        target.canConvert = copied.canConvert;
+        target.canReactivate = copied.canReactivate;
+        target.canSubmitPO = copied.canSubmitPO;
+        target.canRejectPO = copied.canRejectPO;
+        target.canApproveViability = copied.canApproveViability;
+        target.canUnlockEditQuotation = copied.canUnlockEditQuotation;
+        target.canUnlockEditPO = copied.canUnlockEditPO;
+        target.canUnlockEditViability = copied.canUnlockEditViability;
+        target.canUnlockEditAnnexure = copied.canUnlockEditAnnexure;
       }
       this.flatPermissions = [...this.flatPermissions];
       this.recomputeConflicts();

@@ -308,6 +308,10 @@ export class QuotationDetailDialogComponent implements OnInit {
       previousRow: any | null;
       isForDeliveryTerm?: boolean;
       deliveryModeName?: string;
+      /** 'quotation' (default) drives the QuotDetails endpoints.
+       *  'po' drives the PO Working Sheet endpoints — same dialog,
+       *  same fields, different URL base. */
+      mode?: 'quotation' | 'po';
     },
   ) {
     this.isEdit = !!data.detail?.quotDtlId;
@@ -408,9 +412,12 @@ export class QuotationDetailDialogComponent implements OnInit {
     this.api.get<any[]>('/masters/item-grades').subscribe({
       next: d => {
         this.itemGrades = d;
-        // Default grade to "Fe500D" for new items
+        // Default grade to whichever master row contains "550D"
+        // (e.g. "550D", "Fe550D", "550D Plus") for net-new lines only.
+        // Imported lines (from-enquiry) bypass this dialog so their
+        // grade is preserved as-quoted.
         if (!this.isEdit && !this.row.itemGradeName) {
-          const def = d.find((g: any) => g.itemGradeName === 'Fe500D' || g.itemGradeName === 'Fe 500D');
+          const def = d.find((g: any) => (g.itemGradeName || '').toUpperCase().includes('550D'));
           if (def) this.row.itemGradeName = def.itemGradeName;
         }
       },
@@ -621,9 +628,12 @@ export class QuotationDetailDialogComponent implements OnInit {
     payload.quantity = payload.quantity || 1;
     payload.basicRate = payload.totRate;
 
+    const base = this.data.mode === 'po'
+      ? `/quotations/${this.data.quotId}/purchase-order/working-sheet`
+      : `/quotations/${this.data.quotId}/details`;
     const req$ = this.isEdit
-      ? this.api.put(`/quotations/${this.data.quotId}/details/${this.row.quotDtlId}`, payload)
-      : this.api.post(`/quotations/${this.data.quotId}/details`, payload);
+      ? this.api.put(`${base}/${this.row.quotDtlId}`, payload)
+      : this.api.post(base, payload);
 
     req$.subscribe({
       next: () => {

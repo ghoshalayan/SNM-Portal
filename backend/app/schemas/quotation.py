@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, datetime
 
+from app.schemas.quot_purchase_order import QuotPurchaseOrderResponse
+
 
 class QuotSummaryCreate(BaseModel):
     enqid: Optional[int] = None
@@ -15,8 +17,6 @@ class QuotSummaryCreate(BaseModel):
     deliveryModeId: Optional[int] = None
     refQuotNo: Optional[str] = None
     remarks: Optional[str] = None
-    CustomerPONo: Optional[str] = None
-    CustomerPODate: Optional[date] = None
     codeUserId: Optional[int] = None  # for select_code mode
 
 class QuotSummaryUpdate(QuotSummaryCreate):
@@ -39,17 +39,22 @@ class QuotSummaryResponse(BaseModel):
     deliveryModeId: Optional[int] = None
     refQuotNo: Optional[str] = None
     remarks: Optional[str] = None
-    CustomerPONo: Optional[str] = None
-    CustomerPODate: Optional[date] = None
     revisionNo: Optional[int] = None
     versionNo: int
     parentQuotId: Optional[int] = None
     approvedby: Optional[int] = None
     approvedon: Optional[datetime] = None
+    # Convert action audit pair (Phase 1) — set when the quotation
+    # crosses the Approved → Converted forward gate.
+    convertedOn: Optional[datetime] = None
+    convertedBy: Optional[int] = None
     status: Optional[str] = None
     isActive: bool
     createdby: Optional[int] = None
     createdon: Optional[datetime] = None
+    # Captured at the Approved → Converted transition. None for Draft /
+    # Approved quotations that haven't crossed the gate yet.
+    purchase_order: Optional[QuotPurchaseOrderResponse] = None
     class Config:
         from_attributes = True
 

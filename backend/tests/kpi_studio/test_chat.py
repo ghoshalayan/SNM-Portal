@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 from collections import deque
 
@@ -163,6 +164,20 @@ def _build_app(provider=None):
 class _Base(unittest.TestCase):
     def setUp(self):
         _active_user["u"] = FakeUser()
+        # Disable Pre-flight in tests — every test below scripts the
+        # main agent's tool-use turns directly. Pre-flight would
+        # consume a turn before the agent ever runs, busting the
+        # script. KPI_PREFLIGHT_ENABLED=false flips the
+        # settings_service env-fallback so the test app skips the
+        # Planner ↔ Resolver loop. Cleaned up in tearDown.
+        self._prev_pf = os.environ.get("KPI_PREFLIGHT_ENABLED")
+        os.environ["KPI_PREFLIGHT_ENABLED"] = "false"
+
+    def tearDown(self):
+        if self._prev_pf is None:
+            os.environ.pop("KPI_PREFLIGHT_ENABLED", None)
+        else:
+            os.environ["KPI_PREFLIGHT_ENABLED"] = self._prev_pf
 
     def _client(self, provider=None):
         app, Session = _build_app(provider)
@@ -297,8 +312,13 @@ class TurnPipelineTests(_Base):
                 self.assertEqual(r.status_code, 200, r.text)
                 ai = r.json()["assistant_message"]
                 self.assertFalse(ai["succeeded"])
-                self.assertEqual(ai["error"], "llm_disabled")
+                # Per the chat_service contract, the technical error
+                # code is logged + on the abort step but cleared from
+                # the persisted ``error`` field — the friendly message
+                # in ``content`` is the only thing the user sees.
+                self.assertIsNone(ai["error"])
                 self.assertIn("disabled", ai["content"].lower())
+                self.assertIn("provider", ai["content"].lower())
         _run(go())
 
     def test_unsafe_proposed_sql_is_recorded_as_failed_turn(self):
@@ -318,9 +338,18 @@ class TurnPipelineTests(_Base):
                 )
                 ai = r.json()["assistant_message"]
                 self.assertFalse(ai["succeeded"])
-                # Validator caught it before execution.
+                # Validator caught the DROP before execution — no result rows.
                 self.assertIsNone(ai["result_columns"])
-                self.assertTrue((ai["error"] or "").lower())
+                # The user gets a friendly retry message; the technical
+                # error code is on the abort step (cleared from
+                # ``error`` to keep the bubble clean). Verify the
+                # message is non-empty (i.e., we actually rendered
+                # something for the user, not a blank failure).
+                self.assertIsNone(ai["error"])
+                self.assertTrue(ai["content"])
+                # SQL was proposed (the unsafe DROP) and is recorded
+                # so admins can audit — but it was never executed.
+                self.assertIn("drop", (ai["sql"] or "").lower())
         _run(go())
 
 

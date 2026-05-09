@@ -482,6 +482,16 @@ class KpiChatMessage(KpiBase):
     role = Column(String(20), nullable=False)  # 'user' | 'assistant'
     content = Column(Text, nullable=False, default="")
 
+    # Discriminator for the *kind* of assistant turn (always 'answer'
+    # for user turns by convention):
+    #   - 'answer'  : canonical successful query turn (default for all
+    #                 pre-existing data + the happy path).
+    #   - 'clarify' : Pre-flight Planner couldn't disambiguate and is
+    #                 asking the user a follow-up question. ``content``
+    #                 holds the question; no SQL / chart / insight.
+    # Future variants ('reject', 'plan', etc.) reuse this column.
+    kind = Column(String(20), nullable=False, default="answer")
+
     # Assistant-only fields. Null for user turns.
     sql = Column(Text, nullable=True)
     rewritten_sql = Column(Text, nullable=True)
@@ -606,6 +616,18 @@ class KpiSettings(KpiBase):
     # how location mapping works, the lifecycle of an enquiry / quotation,
     # etc. Plain text (markdown-friendly). Null = skip the extras block.
     domain_knowledge = Column(Text, nullable=True)
+
+    # ----- Pre-flight Planner / Resolver knobs -----
+    # All nullable — Python-side resolution in settings_service supplies
+    # sensible defaults so a fresh row works without admin intervention.
+    #
+    # ``preflight_enabled``    — kill switch for the entire preflight loop
+    # ``preflight_max_rounds`` — Planner ↔ Resolver round cap (default 5)
+    # ``preflight_user_escalations`` — consecutive ``ask_user`` turns we
+    #                            allow before forcing ``ready`` (default 2)
+    preflight_enabled = Column(Boolean, nullable=True)
+    preflight_max_rounds = Column(Integer, nullable=True)
+    preflight_user_escalations = Column(Integer, nullable=True)
 
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     updated_by = Column(Integer, nullable=True)

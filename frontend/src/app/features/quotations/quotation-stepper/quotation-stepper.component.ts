@@ -1,39 +1,56 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input, computed, signal } from '@angular/core';
+import { Component, EventEmitter, Input, Output, computed, signal } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
 /**
- * Horizontal timeline showing where a quotation sits in its lifecycle.
+ * Lifecycle stage stepper. Four canonical stages for the new workspace
+ * (Phase 5 brought forward to Phase 1):
  *
- * Stations:
- *   Draft → Approved → Matured → Viability → Annexure
+ *   Quotation → Purchase Order → Viability → Annexure
  *
- * Side-states:
- *   - status === 'Reject'   → shown inline on whichever station is current
- *                             (Reject only happens from Approved, so it sits at step 2).
- *   - status === 'Revised'  → label on step 1; signals this version is frozen.
+ * Each stage shows its own status sub-text (driven by the matching
+ * per-stage entity, not the legacy collapsed ``QuotSummary.status``).
+ * Click to navigate to that stage's tab group inside the workspace.
  *
- * `viabilityStatus` is optional; when null the Viability step shows a dotted
- * outline (not yet generated).
+ * Inputs:
+ *   - ``currentStage`` (default 'quotation') — which station to render
+ *     as active. Parent owns this state.
+ *   - ``quotationStatus`` — drives the Quotation station's sub-status
+ *     and reached state for the rest of the lifecycle.
+ *   - ``poStatus`` — Stage-2 PO row status (Draft / Submitted /
+ *     Rejected / null).
+ *   - ``viabilityStatus`` — Stage-3 viability sheet status (Draft /
+ *     Approved / null).
+ *   - ``annexureStatus`` — Stage-4 annexure status (Draft / Approved
+ *     / null).
+ *
+ * Emits:
+ *   - ``stageSelected`` when the user clicks a station. Parent maps
+ *     this to a tab-group switch.
  */
 
-export type QuotStatus = 'Draft' | 'Approved' | 'Matured' | 'Reject' | 'Revised' | string;
+export type QuotStatus = 'Draft' | 'Approved' | 'Converted' | 'Reject' | 'Revised' | string;
+export type PoStatus = 'Draft' | 'Submitted' | 'Rejected' | null | undefined;
 export type ViabilityStatus = 'Draft' | 'Approved' | null | undefined;
+export type AnnexureStatus = 'Draft' | 'Approved' | null | undefined;
+export type StageKey = 'quotation' | 'po' | 'viability' | 'annexure';
 
 interface Stop {
-  key: 'draft' | 'approved' | 'matured' | 'viability' | 'annexure';
+  key: StageKey;
   label: string;
   icon: string;
-  /** true → solid highlight (this is "current" or passed) */
+  /** true → solid highlight (this stage has been started or passed). */
   reached: boolean;
-  /** true → this is the active stop */
+  /** true → user is currently viewing this stage. */
   active: boolean;
-  /** Optional mini-label under the main one (e.g. "Draft" for viability). */
+  /** Sub-text under the label, e.g. "approved" / "draft" / "PO received". */
   sub?: string;
-  /** Mark as error/reject tone. */
+  /** Mark the stop with the warning tone (e.g. Rejected). */
   error?: boolean;
-  /** Future/disabled — e.g. Annexure until we build it. */
+  /** Mark the stop as locked-out (no entity exists yet). Still
+   *  clickable so the user can navigate; content panel handles the
+   *  empty state. */
   future?: boolean;
 }
 
@@ -42,20 +59,21 @@ interface Stop {
   standalone: true,
   imports: [CommonModule, MatIconModule, MatTooltipModule],
   template: `
-    <div class="stepper">
+    <div class="stepper" [class.vertical]="orientation === 'vertical'">
       @for (s of stops(); track s.key; let last = $last) {
-        <div class="stop"
+        <button type="button" class="stop"
           [class.reached]="s.reached"
           [class.active]="s.active"
           [class.error]="s.error"
           [class.future]="s.future"
-          [matTooltip]="tooltipFor(s)">
+          [matTooltip]="tooltipFor(s)"
+          (click)="stageSelected.emit(s.key)">
           <div class="dot">
             <mat-icon>{{ s.icon }}</mat-icon>
           </div>
           <div class="label">{{ s.label }}</div>
           @if (s.sub) { <div class="sub">{{ s.sub }}</div> }
-        </div>
+        </button>
         @if (!last) {
           <div class="line" [class.reached]="connectorReached($index)"></div>
         }
@@ -84,6 +102,17 @@ interface Stop {
       gap: 6px;
       min-width: 0;
       flex: 0 0 auto;
+      background: transparent;
+      border: 0;
+      padding: 4px 6px;
+      cursor: pointer;
+      border-radius: 10px;
+      transition: background 0.18s ease;
+    }
+    .stop:hover { background: var(--snm-accent-subtle, rgba(58,107,181,0.08)); }
+    .stop:focus-visible {
+      outline: 2px solid var(--snm-accent);
+      outline-offset: 2px;
     }
 
     .dot {
@@ -95,9 +124,7 @@ interface Stop {
       color: var(--snm-text-muted);
       transition: all 0.2s ease;
     }
-    .dot mat-icon {
-      font-size: 20px; width: 20px; height: 20px;
-    }
+    .dot mat-icon { font-size: 20px; width: 20px; height: 20px; }
 
     .label {
       font-size: 12px;
@@ -136,14 +163,14 @@ interface Stop {
     }
     .stop.error .label { color: #c62828; }
 
-    .stop.future .dot { opacity: 0.5; }
+    .stop.future .dot { opacity: 0.6; }
     .stop.future .label { color: var(--snm-text-faint); }
 
     .line {
       flex: 1 1 auto;
       min-width: 24px;
       height: 2px;
-      margin-top: 17px;   /* centers on the dot */
+      margin-top: 21px;   /* centers on the dot inside the .stop button */
       background: var(--snm-border-divider);
       transition: background 0.2s ease;
     }
@@ -158,6 +185,72 @@ interface Stop {
       .dot { width: 32px; height: 32px; }
       .dot mat-icon { font-size: 18px; width: 18px; height: 18px; }
     }
+
+    /* ----- Vertical (Phase 5 side-rail) layout ----- */
+    .stepper.vertical {
+      flex-direction: column;
+      align-items: stretch;
+      padding: 12px;
+      min-width: 220px;
+      width: 100%;
+      gap: 0;
+      position: sticky;
+      top: 12px;
+    }
+    .stepper.vertical .stop {
+      flex-direction: row;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 12px;
+      padding: 10px 12px;
+      width: 100%;
+      text-align: left;
+    }
+    .stepper.vertical .label {
+      flex: 1;
+      font-size: 13px;
+      white-space: normal;
+    }
+    .stepper.vertical .sub {
+      flex-shrink: 0;
+      align-self: center;
+    }
+    /* Connector becomes a vertical line between dots in column mode. */
+    .stepper.vertical .line {
+      flex: 0 0 auto;
+      width: 2px;
+      height: 18px;
+      margin: 0 0 0 30px;     /* aligns under the dot in column mode */
+      align-self: flex-start;
+    }
+    .stepper.vertical .line.reached {
+      background: linear-gradient(180deg, var(--snm-accent-dark), var(--snm-accent));
+    }
+
+    @media (max-width: 768px) {
+      /* On phones the vertical rail flips back to a horizontal strip
+         at the top so the active-stage card gets the full width. */
+      .stepper.vertical {
+        flex-direction: row;
+        position: static;
+        min-width: 0;
+      }
+      .stepper.vertical .stop {
+        flex-direction: column;
+        text-align: center;
+        gap: 6px;
+        padding: 4px 6px;
+      }
+      .stepper.vertical .line {
+        width: auto;
+        height: 2px;
+        flex: 1 1 auto;
+        margin-top: 17px;
+        margin-left: 0;
+      }
+      .stepper.vertical .label { font-size: 11px; }
+      .stepper.vertical .sub { display: none; }
+    }
   `],
 })
 export class QuotationStepperComponent {
@@ -166,92 +259,118 @@ export class QuotationStepperComponent {
   }
   get quotationStatus(): QuotStatus { return this._status(); }
 
-  @Input() set viabilityStatus(v: ViabilityStatus) {
-    this._viab.set(v || null);
-  }
+  @Input() set poStatus(v: PoStatus) { this._po.set(v || null); }
+  get poStatus(): PoStatus { return this._po(); }
+
+  @Input() set viabilityStatus(v: ViabilityStatus) { this._viab.set(v || null); }
   get viabilityStatus(): ViabilityStatus { return this._viab(); }
+
+  @Input() set annexureStatus(v: AnnexureStatus) { this._ann.set(v || null); }
+  get annexureStatus(): AnnexureStatus { return this._ann(); }
+
+  @Input() set currentStage(v: StageKey) { this._current.set(v || 'quotation'); }
+  get currentStage(): StageKey { return this._current(); }
 
   @Input() versionNo?: number;
   @Input() parentQuotId?: number | null;
+  /** Layout orientation. ``horizontal`` (default) is the workspace
+   *  header strip. ``vertical`` is the Phase-5 side-rail layout —
+   *  stops stacked top-to-bottom in a sticky left column. */
+  @Input() orientation: 'horizontal' | 'vertical' = 'horizontal';
+
+  /** Emitted when the user clicks a station. Parent updates
+   *  ``currentStage`` and re-renders the workspace's stage panel. */
+  @Output() stageSelected = new EventEmitter<StageKey>();
 
   private _status = signal<QuotStatus>('Draft');
+  private _po = signal<PoStatus>(null);
   private _viab = signal<ViabilityStatus>(null);
+  private _ann = signal<AnnexureStatus>(null);
+  private _current = signal<StageKey>('quotation');
 
   stops = computed<Stop[]>(() => {
     const s = this._status();
+    const po = this._po();
     const v = this._viab();
+    const a = this._ann();
     const isRevised = s === 'Revised';
     const isReject = s === 'Reject';
 
-    // Derive viability & annexure sub-states from quotation.status too — it
-    // progresses Matured → ViabilityGenerated → ViabilityApproved →
-    // AnnexureGenerated → AnnexureApproved as the user moves through stages.
-    const viabReached =
-      v != null
-      || s === 'ViabilityGenerated' || s === 'ViabilityApproved'
-      || s === 'AnnexureGenerated' || s === 'AnnexureApproved';
-    const viabApproved =
-      v === 'Approved'
-      || s === 'ViabilityApproved'
-      || s === 'AnnexureGenerated' || s === 'AnnexureApproved';
-    const annexureReached = s === 'AnnexureGenerated' || s === 'AnnexureApproved';
-    const annexureApproved = s === 'AnnexureApproved';
+    // "Reached" = stage has been started (entity exists / status set).
+    // The Quotation stage is always reached (always exists).
+    const quotReached = true;
+    // Stage 2 reached when the quotation is Converted OR a PO row
+    // exists. (Phase-4 status simplification: legacy strings have
+    // been migrated to ``Converted`` so we no longer enumerate them.)
+    const poReached = po != null || s === 'Converted';
+    const viabReached = v != null;
+    const annReached = a != null;
 
-    const reached = {
-      draft: true,
-      approved: this._hasPassed('approved'),
-      matured: this._hasPassed('matured'),
-      viability: viabReached,
-      annexure: annexureReached,
-    };
+    const current = this._current();
+    const poDone = po === 'Submitted';
+    const viabApproved = v === 'Approved';
+    const annApproved = a === 'Approved';
+    const poRejected = po === 'Rejected';
 
-    const activeKey = this._activeKey();
-
-    const stops: Stop[] = [
+    return [
       {
-        key: 'draft',
-        label: isRevised ? 'Revised' : 'Draft',
-        icon: isRevised ? 'history' : 'edit_note',
-        reached: reached.draft,
-        active: activeKey === 'draft',
-        sub: isRevised ? 'superseded' : undefined,
-      },
-      {
-        key: 'approved',
-        label: isReject ? 'Rejected' : 'Approved',
-        icon: isReject ? 'cancel' : 'check_circle',
-        reached: reached.approved || isReject,
-        active: activeKey === 'approved',
+        key: 'quotation',
+        label: isRevised ? 'Quotation' : 'Quotation',
+        icon: isReject ? 'cancel' : (isRevised ? 'history' : 'edit_note'),
+        reached: quotReached,
+        active: current === 'quotation',
         error: isReject,
+        sub: this._quotSubLabel(s),
       },
       {
-        key: 'matured',
-        label: 'Matured',
-        icon: 'verified',
-        reached: reached.matured,
-        active: activeKey === 'matured',
-        sub: reached.matured ? 'PO received' : undefined,
+        key: 'po',
+        label: 'Purchase Order',
+        icon: poRejected ? 'cancel' : (poDone ? 'verified' : 'receipt_long'),
+        reached: poReached,
+        active: current === 'po',
+        error: poRejected,
+        future: !poReached,
+        sub: poReached
+          ? (po
+              ? po.toLowerCase()
+              : 'awaiting submit')
+          : undefined,
       },
       {
         key: 'viability',
         label: 'Viability',
         icon: 'query_stats',
-        reached: reached.viability,
-        active: activeKey === 'viability',
-        sub: reached.viability ? (viabApproved ? 'approved' : 'draft') : undefined,
+        reached: viabReached,
+        active: current === 'viability',
+        future: !viabReached,
+        sub: viabReached
+          ? (viabApproved ? 'approved' : 'draft')
+          : undefined,
       },
       {
         key: 'annexure',
         label: 'Annexure',
         icon: 'description',
-        reached: reached.annexure,
-        active: activeKey === 'annexure',
-        sub: reached.annexure ? (annexureApproved ? 'approved' : 'draft') : undefined,
-        future: !reached.annexure,
+        reached: annReached,
+        active: current === 'annexure',
+        future: !annReached,
+        sub: annReached
+          ? (annApproved ? 'approved' : 'draft')
+          : undefined,
       },
     ];
-    return stops;
   });
+
+  private _quotSubLabel(s: QuotStatus): string | undefined {
+    switch (s) {
+      case 'Draft': return 'draft';
+      case 'Approved': return 'approved';
+      case 'Converted': return 'converted';
+      case 'Reject': return 'rejected';
+      case 'Revised': return 'superseded';
+      default: return undefined;
+    }
+  }
 
   connectorReached(i: number): boolean {
     const s = this.stops();
@@ -260,65 +379,24 @@ export class QuotationStepperComponent {
 
   tooltipFor(s: Stop): string {
     switch (s.key) {
-      case 'draft':
-        return s.label === 'Revised'
-          ? 'This version has been superseded by a newer revision.'
-          : 'Quotation is in draft — not yet approved.';
-      case 'approved':
+      case 'quotation':
         return s.error
-          ? 'Approved quotation was rejected. It can be reverted.'
-          : 'Quotation has been approved.';
-      case 'matured':
-        return s.reached
-          ? 'PO received — quotation matured.'
-          : 'Waiting for purchase order to mark as matured.';
+          ? 'Quotation was rejected. Reactivate to resume.'
+          : 'Stage 1 — Quotation: header, line items, terms & conditions.';
+      case 'po':
+        if (s.error) return 'PO was rejected; quotation is back at Approved.';
+        if (!s.reached) return 'Stage 2 — Purchase Order. Locked until the quotation is Converted.';
+        return 'Stage 2 — Purchase Order: PO header + final working sheet.';
       case 'viability':
-        if (!s.reached) return 'Viability sheet not yet generated.';
+        if (!s.reached) return 'Stage 3 — Viability. Locked until the PO is submitted.';
         return s.sub === 'approved'
-          ? 'Viability sheet is approved.'
-          : 'Viability sheet is in draft — pending approval.';
+          ? 'Stage 3 — Viability: approved.'
+          : 'Stage 3 — Viability: draft, pending approval.';
       case 'annexure':
-        return 'Annexure generation — coming soon.';
+        if (!s.reached) return 'Stage 4 — Annexure. Locked until viability is approved.';
+        return s.sub === 'approved'
+          ? 'Stage 4 — Annexure: approved.'
+          : 'Stage 4 — Annexure: draft, pending approval.';
     }
-  }
-
-  // --- private helpers ---
-  private _order = ['draft', 'approved', 'matured', 'viability', 'annexure'] as const;
-
-  private _hasPassed(stop: (typeof this._order)[number]): boolean {
-    const s = this._status();
-    const v = this._viab();
-    const post = new Set([
-      'Approved', 'Matured',
-      'ViabilityGenerated', 'ViabilityApproved',
-      'AnnexureGenerated', 'AnnexureApproved',
-    ]);
-    switch (stop) {
-      case 'approved':
-        return post.has(s) || v != null;
-      case 'matured':
-        return (
-          s === 'Matured'
-          || s === 'ViabilityGenerated' || s === 'ViabilityApproved'
-          || s === 'AnnexureGenerated' || s === 'AnnexureApproved'
-          || v != null
-        );
-      default:
-        return false;
-    }
-  }
-
-  private _activeKey(): Stop['key'] {
-    const s = this._status();
-    const v = this._viab();
-    if (s === 'AnnexureApproved') return 'annexure';
-    if (s === 'AnnexureGenerated') return 'annexure';
-    if (s === 'ViabilityApproved') return 'annexure';  // next step is generate annexure
-    if (s === 'ViabilityGenerated' || v === 'Draft') return 'viability';
-    if (v === 'Approved') return 'annexure';
-    if (s === 'Matured') return 'viability';  // next action is generate viability
-    if (s === 'Approved') return 'matured';
-    if (s === 'Reject') return 'approved';
-    return 'draft';
   }
 }

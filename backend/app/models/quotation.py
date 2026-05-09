@@ -22,13 +22,19 @@ class QuotSummary(Base, AuditMixin):
     deliveryModeId = Column(Integer, ForeignKey("DeliveryMode.deliveryModeId"), nullable=True)
     refQuotNo = Column(String(50), nullable=True)
     remarks = Column(String(500), nullable=True)
-    CustomerPONo = Column(String(50), nullable=True)
-    CustomerPODate = Column(Date, nullable=True)
     revisionNo = Column(Integer, default=0, nullable=True)
     versionNo = Column(Integer, default=1, nullable=False)
     parentQuotId = Column(Integer, ForeignKey("QuotSummary.quotId"), nullable=True)
     approvedby = Column(Integer, ForeignKey("UserMaster.userId"), nullable=True)
     approvedon = Column(DateTime, nullable=True)
+    # Convert action (Phase 1) — Approved → Converted forward gate.
+    # The lifecycle position past Stage 1 is computed from per-stage
+    # statuses on QuotPurchaseOrder / QuotViabilitySheet / QuotAnnexure
+    # rather than encoded back here. Attribute names match the DB
+    # columns (camelCase) for consistency with the rest of QuotSummary
+    # — some consumers iterate by ``column.name`` rather than ``.key``.
+    convertedOn = Column(DateTime, nullable=True)
+    convertedBy = Column(Integer, ForeignKey("UserMaster.userId"), nullable=True)
     status = Column(String(50), default="Draft", nullable=True)
 
     owner = relationship("User", foreign_keys=[ownerUserId])
@@ -43,6 +49,15 @@ class QuotSummary(Base, AuditMixin):
     approved_by_user = relationship("User", foreign_keys=[approvedby])
     details = relationship("QuotDetails", back_populates="quotation")
     terms = relationship("QuotTermsNConditions", back_populates="quotation")
+    # 1:1 in v1; UNIQUE filtered index on quotId enforces this at the DB
+    # level. ``uselist=False`` makes ``quotation.purchase_order`` resolve
+    # to the single active PO row (or None when not yet captured).
+    purchase_order = relationship(
+        "QuotPurchaseOrder",
+        back_populates="quotation",
+        uselist=False,
+        foreign_keys="QuotPurchaseOrder.quotId",
+    )
 
 
 class QuotDetails(Base, AuditMixin):

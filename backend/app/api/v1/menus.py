@@ -167,6 +167,13 @@ def get_permission_schema(
             "canEditNumber", "canApprove", "canRevise",
             "canTransferOwnership", "canGenerateUnderOthers",
             "canApproveAnnexure",
+            # Phase 1 lifecycle flags — surfaced under Quotations menu
+            # since all four lifecycle endpoints route through it.
+            "canConvert", "canReactivate",
+            "canSubmitPO", "canRejectPO",
+            "canApproveViability",
+            "canUnlockEditQuotation", "canUnlockEditPO",
+            "canUnlockEditViability", "canUnlockEditAnnexure",
         ],
         "Enquiries": [
             "canEditNumber", "canApprove",
@@ -186,6 +193,16 @@ def get_permission_schema(
         "canTransferOwnership": "Transfer Ownership",
         "canGenerateUnderOthers": "Gen Under Others",
         "canApproveAnnexure": "Approve Annexure",
+        # Phase 1 lifecycle flags
+        "canConvert": "Convert",
+        "canReactivate": "Reactivate",
+        "canSubmitPO": "Submit & Mature PO",
+        "canRejectPO": "Reject PO",
+        "canApproveViability": "Approve Viability",
+        "canUnlockEditQuotation": "Unlock Quotation",
+        "canUnlockEditPO": "Unlock PO",
+        "canUnlockEditViability": "Unlock Viability",
+        "canUnlockEditAnnexure": "Unlock Annexure",
     }
     # One-line business hints used in tooltips and the preview strip.
     descriptions = {
@@ -199,6 +216,15 @@ def get_permission_schema(
         "canTransferOwnership": "Hand ownership to another user",
         "canGenerateUnderOthers": "Generate numbers using another user's code",
         "canApproveAnnexure": "Approve a quotation annexure and edit it post-approval (Commercial HOD)",
+        "canConvert": "Convert an Approved quotation (forward gate to Stage 2)",
+        "canReactivate": "Reactivate a Rejected quotation back to Approved",
+        "canSubmitPO": "Submit & Mature the captured PO (forward gate to Stage 3)",
+        "canRejectPO": "Reject a Submitted PO and un-Convert the quotation",
+        "canApproveViability": "Approve the viability sheet (forward gate to Stage 4)",
+        "canUnlockEditQuotation": "Privileged: edit a Converted/locked quotation in place (audited)",
+        "canUnlockEditPO": "Privileged: edit a Submitted/locked PO in place (audited)",
+        "canUnlockEditViability": "Privileged: edit an Approved viability sheet in place (audited)",
+        "canUnlockEditAnnexure": "Privileged: edit an Approved annexure in place (audited; equivalent of CanApproveAnnexure)",
     }
     return {
         "core": CORE,
@@ -245,6 +271,16 @@ def get_role_menu_permissions(
             "canTransferOwnership": m.CanTransferOwnership if m else False,
             "canGenerateUnderOthers": m.CanGenerateUnderOthers if m else False,
             "canApproveAnnexure": m.CanApproveAnnexure if m else False,
+            # Phase 1 lifecycle flags
+            "canConvert": m.CanConvert if m else False,
+            "canReactivate": m.CanReactivate if m else False,
+            "canSubmitPO": m.CanSubmitPO if m else False,
+            "canRejectPO": m.CanRejectPO if m else False,
+            "canApproveViability": m.CanApproveViability if m else False,
+            "canUnlockEditQuotation": m.CanUnlockEditQuotation if m else False,
+            "canUnlockEditPO": m.CanUnlockEditPO if m else False,
+            "canUnlockEditViability": m.CanUnlockEditViability if m else False,
+            "canUnlockEditAnnexure": m.CanUnlockEditAnnexure if m else False,
         })
     return result
 
@@ -258,14 +294,12 @@ def save_role_menu_permissions(
 ):
     _validate_role_access(db, role_id, current_user)
 
-    # Fields we diff for audit. The names here match the UI's camelCase flag
-    # keys; we translate to the DB's PascalCase column names when reading
-    # the existing row.
-    AUDIT_FIELDS = [
-        "canAdd", "canRead", "canEdit", "canDelete", "canEditNumber",
-        "canApprove", "canRevise", "canTransferOwnership", "canGenerateUnderOthers",
-        "canApproveAnnexure",
-    ]
+    # ``camelCase`` flag name (UI / API) → ``PascalCase`` column name (DB).
+    # Single source of truth: every flag listed here is one that round-trips
+    # end-to-end. To add a new flag: add a column on RoleMenuMap (+ migration),
+    # add the field to ``RoleMenuPermission`` in schemas/menu.py, and add the
+    # entry here. The save handler iterates this dict — there is no other
+    # place to update.
     FIELD_TO_COL = {
         "canAdd": "CanAdd",
         "canRead": "CanRead",
@@ -277,6 +311,16 @@ def save_role_menu_permissions(
         "canTransferOwnership": "CanTransferOwnership",
         "canGenerateUnderOthers": "CanGenerateUnderOthers",
         "canApproveAnnexure": "CanApproveAnnexure",
+        # Phase 1 lifecycle flags
+        "canConvert": "CanConvert",
+        "canReactivate": "CanReactivate",
+        "canSubmitPO": "CanSubmitPO",
+        "canRejectPO": "CanRejectPO",
+        "canApproveViability": "CanApproveViability",
+        "canUnlockEditQuotation": "CanUnlockEditQuotation",
+        "canUnlockEditPO": "CanUnlockEditPO",
+        "canUnlockEditViability": "CanUnlockEditViability",
+        "canUnlockEditAnnexure": "CanUnlockEditAnnexure",
     }
 
     # Snapshot current state BEFORE any mutation so the diff is accurate.
@@ -285,7 +329,10 @@ def save_role_menu_permissions(
     ).all()
     before_by_menu = {m.menuId: m for m in existing_rows}
 
-    # Deactivate existing mappings
+    # Deactivate existing mappings — any menu *not* present in the request
+    # body will stay deactivated. (Frontend always lists every menu it knows
+    # about, so this is a no-op in practice; deactivation only matters for
+    # menus that have been removed from the company.)
     db.query(RoleMenuMap).filter(
         RoleMenuMap.roleId == role_id,
     ).update({"isActive": False})
@@ -301,47 +348,49 @@ def save_role_menu_permissions(
     company_id = role_obj.companyId if role_obj else current_user.company_id
 
     for perm in permissions:
+        # ``exclude_unset=True`` returns ONLY the flags the caller explicitly
+        # included in the request body. Pydantic distinguishes "default
+        # applied" from "explicitly set", so a frontend that omits a flag
+        # (because it doesn't render a checkbox for it, doesn't know about
+        # it yet, or simply has a bug) will leave the existing DB value
+        # alone instead of the historical silent-reset-to-False behaviour.
+        # Frontends that DO send every flag (current v2 behaviour) keep
+        # their full-replace semantics — every key is present, so every
+        # flag gets written.
+        sent: dict = perm.model_dump(exclude_unset=True)
         prev = before_by_menu.get(perm.menuId)
-        existing = prev  # Same object, if any
-        if existing:
-            existing.CanAdd = perm.canAdd
-            existing.CanRead = perm.canRead
-            existing.CanEdit = perm.canEdit
-            existing.CanDelete = perm.canDelete
-            existing.CanEditNumber = perm.canEditNumber
-            existing.CanApprove = getattr(perm, "canApprove", False)
-            existing.CanRevise = getattr(perm, "canRevise", False)
-            existing.CanTransferOwnership = getattr(perm, "canTransferOwnership", False)
-            existing.CanGenerateUnderOthers = getattr(perm, "canGenerateUnderOthers", False)
-            existing.CanApproveAnnexure = getattr(perm, "canApproveAnnexure", False)
-            existing.isActive = True
-            existing.lastupdateby = current_user.user_id
+
+        if prev is not None:
+            for camel, col in FIELD_TO_COL.items():
+                if camel in sent:
+                    setattr(prev, col, bool(sent[camel]))
+            prev.isActive = True
+            prev.lastupdateby = current_user.user_id
         else:
-            existing = RoleMenuMap(
+            # New row — every flag in the new row needs *some* value because
+            # the columns are NOT NULL. For flags the caller didn't send we
+            # default to False (matches the historical behaviour for fresh
+            # menus); flags that were sent take their explicit value.
+            new_kwargs = {col: False for col in FIELD_TO_COL.values()}
+            for camel, col in FIELD_TO_COL.items():
+                if camel in sent:
+                    new_kwargs[col] = bool(sent[camel])
+            db.add(RoleMenuMap(
                 roleId=role_id,
                 menuId=perm.menuId,
-                CanAdd=perm.canAdd,
-                CanRead=perm.canRead,
-                CanEdit=perm.canEdit,
-                CanDelete=perm.canDelete,
-                CanEditNumber=perm.canEditNumber,
-                CanApprove=getattr(perm, "canApprove", False),
-                CanRevise=getattr(perm, "canRevise", False),
-                CanTransferOwnership=getattr(perm, "canTransferOwnership", False),
-                CanGenerateUnderOthers=getattr(perm, "canGenerateUnderOthers", False),
-                CanApproveAnnexure=getattr(perm, "canApproveAnnexure", False),
                 createdby=current_user.user_id,
-            )
-            db.add(existing)
+                **new_kwargs,
+            ))
 
-        # Diff every tracked flag. `prev` is None for newly-added menus →
-        # old value is None and newValue is the freshly-set flag.
-        for f in AUDIT_FIELDS:
-            new_v = bool(getattr(perm, f, False))
-            old_v = bool(getattr(prev, FIELD_TO_COL[f])) if prev else None
-            # Treat "None → False" on a brand-new row as a no-op — nobody
-            # toggled anything; default creation. But when the new value is
-            # truthy (genuinely granted on creation), record it.
+        # Audit only flags the caller actually sent — silently-preserved
+        # flags didn't change, so they don't belong in the diff. For brand-
+        # new rows, "default False on a flag the caller didn't send" is also
+        # not a real toggle and shouldn't generate audit noise.
+        for camel in FIELD_TO_COL:
+            if camel not in sent:
+                continue
+            new_v = bool(sent[camel])
+            old_v = bool(getattr(prev, FIELD_TO_COL[camel])) if prev else None
             if prev is None and new_v is False:
                 continue
             if old_v != new_v:
@@ -349,7 +398,7 @@ def save_role_menu_permissions(
                     companyId=company_id,
                     roleId=role_id,
                     menuId=perm.menuId,
-                    field=FIELD_TO_COL[f],
+                    field=FIELD_TO_COL[camel],
                     oldValue=old_v,
                     newValue=new_v,
                     changedby=current_user.user_id,

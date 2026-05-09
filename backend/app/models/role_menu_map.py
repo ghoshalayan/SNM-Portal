@@ -24,3 +24,22 @@ class RoleMenuMap(Base, AuditMixin):
     # even after it has been approved (override of the regular lock).
     # Regular HODs keep CanApprove for quotation-level approval.
     CanApproveAnnexure = Column(Boolean, default=False, nullable=False)
+
+    # ---- Phase 1 lifecycle flags ----
+    # Forward gates and per-stage approvers. ``CanApprove`` continues
+    # to gate quotation approval (legacy, unchanged). The flags below
+    # are only meaningful on the "Quotations" menu — every lifecycle
+    # endpoint already routes through that single menu.
+    CanConvert = Column(Boolean, default=False, nullable=False)
+    CanReactivate = Column(Boolean, default=False, nullable=False)
+    CanSubmitPO = Column(Boolean, default=False, nullable=False)
+    CanRejectPO = Column(Boolean, default=False, nullable=False)
+    CanApproveViability = Column(Boolean, default=False, nullable=False)
+    # Per-stage Unlock-and-Edit escape valves. Different roles can
+    # hold different ones (e.g. only Commercial HOD ever unlocks an
+    # approved annexure; only CompanyAdmin can unlock a converted
+    # quotation). Flag granularity is per stage.
+    CanUnlockEditQuotation = Column(Boolean, default=False, nullable=False)
+    CanUnlockEditPO = Column(Boolean, default=False, nullable=False)
+    CanUnlockEditViability = Column(Boolean, default=False, nullable=False)
+    CanUnlockEditAnnexure = Column(Boolean, default=False, nullable=False)

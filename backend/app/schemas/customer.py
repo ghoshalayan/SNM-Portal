@@ -53,6 +53,7 @@ class CustomerSiteResponse(BaseModel):
     contactPhone3: Optional[str] = None
     contactEmail3: Optional[str] = None
     isHeadOffice: Optional[bool] = False
+    isAdHoc: Optional[bool] = False
     isActive: bool
     class Config:
         from_attributes = True

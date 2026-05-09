@@ -24,9 +24,12 @@ from app.models.financial_year import FinancialYear
 from app.models.ownership_transfer import OwnershipTransfer
 from app.models.cost_template import CostTemplate
 from app.models.quot_viability import QuotViabilitySheet, QuotViabilityLine
+from app.models.quot_purchase_order import QuotPurchaseOrder
+from app.models.quot_po_working_sheet import QuotPOWorkingSheet
 from app.models.quot_annexure import QuotAnnexure
 from app.models.role_menu_audit import RoleMenuMapAudit
 from app.models.quot_activity_log import QuotActivityLog
+from app.models.lifecycle_unlock_audit import LifecycleUnlockAudit
 
 __all__ = [
     "Company",
@@ -54,7 +57,10 @@ __all__ = [
     "OwnershipTransfer",
     "CostTemplate",
     "QuotViabilitySheet", "QuotViabilityLine",
+    "QuotPurchaseOrder",
+    "QuotPOWorkingSheet",
     "QuotAnnexure",
     "RoleMenuMapAudit",
     "QuotActivityLog",
+    "LifecycleUnlockAudit",
 ]

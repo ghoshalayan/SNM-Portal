@@ -48,7 +48,7 @@ import { Annexure } from '../quotation-annexure/quotation-annexure.component';
             For <strong>{{ annexure.totalQuantityMT | number:'1.2-2' }} MT</strong>.
           </div>
           <div class="annx-h-line"><strong>From:</strong> {{ annexure.preparedByName || 'KRO Name' }}</div>
-          <div class="annx-h-line"><strong>To:</strong> Mr. A. Chaudhuri / Mrs. S. Basu Sengupta</div>
+          <div class="annx-h-line"><strong>To:</strong> {{ annexure.addressedTo || 'Mr. A. Chaudhuri / Mrs. S. Basu Sengupta' }}</div>
         </div>
 
         <table class="annx-table">
@@ -59,12 +59,14 @@ import { Annexure } from '../quotation-annexure/quotation-annexure.component';
             <tr><td class="num">4)</td><td class="label">Payment Terms:</td><td class="pre">{{ annexure.paymentTerms }}</td></tr>
             <tr><td class="num">5)</td><td class="label">Loadability:</td>
               <td>
-                @if (annexure.loadabilityQty) { {{ annexure.loadabilityQty | number:'1.2-2' }} MT per {{ annexure.transportationMode || 'vehicle' }} }
+                @if ((+annexure.loadabilityQty!) > 0) { {{ annexure.loadabilityQty | number:'1.2-2' }} MT per {{ annexure.transportationMode || 'vehicle' }} }
               </td>
             </tr>
             <tr><td class="num">6)</td><td class="label">Transportation Charges per MT:</td>
               <td>
-                @if (annexure.transportChargesPerMT) { Rs. {{ annexure.transportChargesPerMT | number:'1.2-2' }}/- per MT for {{ annexure.transportationMode || '—' }} }
+                @if ((+annexure.transportChargesPerMT!) > 0) {
+                  Rs. {{ annexure.transportChargesPerMT | number:'1.2-2' }}/- per MT@if (annexure.transportationMode) { for {{ annexure.transportationMode }} }
+                }
               </td>
             </tr>
             <tr><td class="num">7)</td><td class="label">Transportation Charges FOR:</td><td>{{ annexure.transportChargesFOR }}</td></tr>
@@ -73,7 +75,9 @@ import { Annexure } from '../quotation-annexure/quotation-annexure.component';
             <tr><td class="num">10)</td><td class="label">Delivery Schedule:</td><td class="pre">{{ annexure.deliverySchedule }}</td></tr>
             <tr><td class="num">11)</td><td class="label">Transportation Realization:</td>
               <td>
-                @if (annexure.transportRealizationPerMT) { Rs. {{ annexure.transportRealizationPerMT | number:'1.2-2' }}/- per MT for {{ annexure.transportationMode || '—' }} }
+                @if ((+annexure.transportRealizationPerMT!) > 0) {
+                  Rs. {{ annexure.transportRealizationPerMT | number:'1.2-2' }}/- per MT@if (annexure.transportationMode) { for {{ annexure.transportationMode }} }
+                }
               </td>
             </tr>
             <tr><td class="num">12)</td><td class="label">PAN No:</td><td>{{ annexure.panNo }}</td></tr>

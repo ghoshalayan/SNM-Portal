@@ -18,12 +18,20 @@ class AnnexureResponse(BaseModel):
     viabilityId: Optional[int] = None
     status: str
 
+    # Phase 1 versioning + Phase 3 freshness pointers.
+    parentAnnexureId: Optional[int] = None
+    versionNo: Optional[int] = 1
+    sourcedFromQuotationVersion: Optional[int] = None
+    sourcedFromPOVersion: Optional[int] = None
+    sourcedFromViabilityVersion: Optional[int] = None
+
     # Header
     clientName: Optional[str] = None
     customerPONo: Optional[str] = None
     customerPODate: Optional[date] = None
     totalBillableAmount: Optional[Decimal] = None
     totalQuantityMT: Optional[Decimal] = None
+    addressedTo: Optional[str] = None
 
     # Body
     invoicing: Optional[str] = None
@@ -73,6 +81,8 @@ class AnnexureResponse(BaseModel):
 class AnnexureUpdate(BaseModel):
     """All fields optional; whichever keys are sent get updated. Diawise
     breakup can be re-sent as an array (overwrites the stored JSON)."""
+    # Header
+    addressedTo: Optional[str] = None
     # Body
     invoicing: Optional[str] = None
     transportationMode: Optional[str] = None

@@ -249,6 +249,13 @@ export class RoleMenuMappingComponent implements OnInit {
 
   save(): void {
     this.saving = true;
+    // The backend's Pydantic ``RoleMenuPermission`` defaults every field
+    // to false, so any flag NOT in this payload is silently RESET on
+    // save. This page's UI doesn't render checkboxes for the newer flags
+    // (canApproveAnnexure + the Phase-1 lifecycle flags), but the GET
+    // returns them — so we echo whatever was loaded back unchanged.
+    // Without this round-trip, saving from the legacy page would clobber
+    // flags that an admin had set via the v2 page.
     const payload = this.flatPermissions.map(p => ({
       menuId: p.menuId,
       canAdd: p.canAdd,
@@ -260,6 +267,16 @@ export class RoleMenuMappingComponent implements OnInit {
       canRevise: (p as any).canRevise || false,
       canTransferOwnership: (p as any).canTransferOwnership || false,
       canGenerateUnderOthers: (p as any).canGenerateUnderOthers || false,
+      canApproveAnnexure: (p as any).canApproveAnnexure || false,
+      canConvert: (p as any).canConvert || false,
+      canReactivate: (p as any).canReactivate || false,
+      canSubmitPO: (p as any).canSubmitPO || false,
+      canRejectPO: (p as any).canRejectPO || false,
+      canApproveViability: (p as any).canApproveViability || false,
+      canUnlockEditQuotation: (p as any).canUnlockEditQuotation || false,
+      canUnlockEditPO: (p as any).canUnlockEditPO || false,
+      canUnlockEditViability: (p as any).canUnlockEditViability || false,
+      canUnlockEditAnnexure: (p as any).canUnlockEditAnnexure || false,
     }));
 
     this.api.post(`/menus/role-menu-map/${this.roleId}`, payload).subscribe({

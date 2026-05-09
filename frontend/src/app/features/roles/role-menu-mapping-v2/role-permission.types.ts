@@ -19,6 +19,20 @@ export interface MenuPermission {
    *  approval and lets the holder edit annexures even after they are
    *  approved (override of the regular post-approval lock). */
   canApproveAnnexure?: boolean;
+  /** Phase-1 lifecycle flags. Surfaced under the Quotations menu via the
+   *  backend's permission-schema endpoint. They MUST appear here AND in
+   *  the save() payload — Pydantic's ``RoleMenuPermission`` defaults any
+   *  missing field to false, so an omitted flag silently resets to false
+   *  on every save. */
+  canConvert?: boolean;
+  canReactivate?: boolean;
+  canSubmitPO?: boolean;
+  canRejectPO?: boolean;
+  canApproveViability?: boolean;
+  canUnlockEditQuotation?: boolean;
+  canUnlockEditPO?: boolean;
+  canUnlockEditViability?: boolean;
+  canUnlockEditAnnexure?: boolean;
   children?: MenuPermission[];
 }
 
@@ -50,12 +64,20 @@ export const ALL_PERMISSION_FLAGS: (keyof MenuPermission)[] = [
   'canAdd', 'canRead', 'canEdit', 'canDelete', 'canEditNumber',
   'canApprove', 'canRevise', 'canTransferOwnership', 'canGenerateUnderOthers',
   'canApproveAnnexure',
+  'canConvert', 'canReactivate', 'canSubmitPO', 'canRejectPO',
+  'canApproveViability',
+  'canUnlockEditQuotation', 'canUnlockEditPO',
+  'canUnlockEditViability', 'canUnlockEditAnnexure',
 ];
 
 export type FlagKey =
   | 'canAdd' | 'canRead' | 'canEdit' | 'canDelete' | 'canEditNumber'
   | 'canApprove' | 'canRevise' | 'canTransferOwnership' | 'canGenerateUnderOthers'
-  | 'canApproveAnnexure';
+  | 'canApproveAnnexure'
+  | 'canConvert' | 'canReactivate' | 'canSubmitPO' | 'canRejectPO'
+  | 'canApproveViability'
+  | 'canUnlockEditQuotation' | 'canUnlockEditPO'
+  | 'canUnlockEditViability' | 'canUnlockEditAnnexure';
 
 /** Preset templates for quick role baseline. */
 export interface PermissionPreset {

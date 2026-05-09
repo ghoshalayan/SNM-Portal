@@ -9,8 +9,10 @@ from collections import OrderedDict, Counter
 from decimal import Decimal
 from typing import List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.company import Company
 from app.models.customer import CustomerContacts, CustomerMaster, CustomerSite
 from app.models.delivery import DeliveryMode
 from app.models.quot_annexure import QuotAnnexure
@@ -19,8 +21,15 @@ from app.models.quotation import QuotSummary, QuotTermsNConditions
 from app.models.user import User
 
 
-# Statuses at which viability must be before annexure can be generated.
-VIABILITY_APPROVED_STATUSES = {"ViabilityApproved", "AnnexureGenerated", "AnnexureApproved"}
+# Statuses at which the parent quotation must be before annexure can
+# be generated. Under Phase 1 the lifecycle position past Convert is
+# encoded in per-stage statuses, not on QuotSummary, so a Converted
+# quotation with an Approved viability passes the gate. The legacy
+# values stay in the set so any rows still mid-migration also pass.
+VIABILITY_APPROVED_STATUSES = {
+    "Converted",
+    "ViabilityApproved", "AnnexureGenerated", "AnnexureApproved",
+}
 
 
 def _d(v) -> Decimal:
@@ -105,19 +114,38 @@ def generate_annexure(
     if not viability or viability.status != "Approved":
         raise ValueError("An approved viability sheet is required before generating the annexure.")
 
-    # Load related data for auto-population
-    customer = db.query(CustomerMaster).filter(
-        CustomerMaster.customerId == quotation.customerId
-    ).first()
+    # The annexure header (customer name, GST/PAN, contact details,
+    # billing & consignee addresses, PO no/date) all flow from the
+    # Customer PO captured at the Approved → Matured transition. This
+    # is what lets the annexure ship to a project site or bill a group
+    # company even when the original quotation was prepped against the
+    # customer's HO.
+    po = quotation.purchase_order
+    customer = (
+        db.query(CustomerMaster).filter(CustomerMaster.customerId == po.customerId).first()
+        if po else None
+    )
     contact = (
         db.query(CustomerContacts)
-        .filter(CustomerContacts.customerContactId == quotation.customerContactId)
-        .first() if quotation.customerContactId else None
+        .filter(CustomerContacts.customerContactId == po.customerContactId)
+        .first() if (po and po.customerContactId) else None
     )
-    site = (
+    billing_site = (
         db.query(CustomerSite)
-        .filter(CustomerSite.siteId == quotation.siteId)
-        .first() if quotation.siteId else None
+        .filter(CustomerSite.siteId == po.billingSiteId)
+        .first() if (po and po.billingSiteId) else None
+    )
+    consignee_site = (
+        db.query(CustomerSite)
+        .filter(CustomerSite.siteId == po.consigneeSiteId)
+        .first() if (po and po.consigneeSiteId) else None
+    )
+    # Tenant company — drives the "Company" line on the printed
+    # annexure (item 19). Lookup via quotation.companyId rather than a
+    # hardcoded brand string so each tenant prints its own name.
+    company = (
+        db.query(Company).filter(Company.companyId == quotation.companyId).first()
+        if quotation.companyId else None
     )
     delivery_mode = (
         db.query(DeliveryMode)
@@ -209,31 +237,66 @@ def generate_annexure(
             freight_qty += qty
     transport_charges_per_mt = (freight_total / freight_qty) if freight_qty > 0 else None
 
+    # Resolve the human-readable billing / consignee address for the
+    # annexure header. Each can come from a saved CustomerSite (FK on
+    # the PO) or from a free-text manual entry on the PO row when the
+    # user opted not to save the address permanently.
+    billing_address_text = (
+        billing_site.addressLine if billing_site
+        else (po.billingAddressManual if po else None)
+    )
+    consignee_address_text = (
+        consignee_site.addressLine if consignee_site
+        else (po.consigneeAddressManual if po else None)
+    )
+    # ``transportChargesFOR`` is the FOR delivery point — historically
+    # it tracked the consignee (where freight terminates), so we keep
+    # that semantic and seed it from the consignee site.
+    transport_for_text = (
+        consignee_site.addressLine if consignee_site
+        else (consignee_site.siteAddressCode if consignee_site else None)
+    ) or consignee_address_text
+
     annexure = QuotAnnexure(
         companyId=quotation.companyId,
         quotId=quotation.quotId,
         viabilityId=viability.viabilityId,
         status="Draft",
+        # Phase 3 freshness pointers — record the upstream versions
+        # this annexure was auto-filled from so the frontend can
+        # detect when any of the three sources move past the stamp.
+        sourcedFromQuotationVersion=quotation.versionNo,
+        sourcedFromPOVersion=(po.versionNo if po else None),
+        sourcedFromViabilityVersion=viability.versionNo,
 
-        # Header
+        # Header — PO no/date and customer identity now come from the
+        # captured PO, not the quotation row. None for any quotation
+        # that somehow reaches annexure without a PO (shouldn't happen
+        # given the status gate, but defensive).
         clientName=customer.customerName if customer else None,
-        customerPONo=quotation.CustomerPONo,
-        customerPODate=quotation.CustomerPODate,
+        customerPONo=po.poNo if po else None,
+        customerPODate=po.poDate if po else None,
+        # Addressee defaults to the consignee address — the printed
+        # annexure is, by definition, addressed to the entity receiving
+        # the goods. KRO can override on the form before approval.
+        addressedTo=consignee_address_text,
         totalBillableAmount=total_amount,
         totalQuantityMT=total_qty,
 
-        # Static defaults
+        # Static defaults — except ``companyName`` which now reflects
+        # the actual tenant company (looked up by ``quotation.companyId``)
+        # so the printed annexure carries the right brand on it.
         invoicing="Manufacturing",
         tolerance="No excess delivery",
         qualityStandard="IS-1786",
-        companyName="DGP",
+        companyName=(company.companyName if company else None),
         billsTo="HO",
 
         # Auto-derived
         transportationMode=transport_mode,
         transportChargesPerMT=transport_charges_per_mt,
         transportRealizationPerMT=transport_charges_per_mt,  # same as cost per user decision
-        transportChargesFOR=(site.addressLine if site else None) or (site.siteAddressCode if site else None),
+        transportChargesFOR=transport_for_text,
         specificLength=_majority([l.itemLength for l in active_lines]),
         qualityFe=_majority([l.itemGradeName for l in active_lines]),
         qualityStandardLength=_majority([l.itemLength for l in active_lines]),
@@ -242,8 +305,8 @@ def generate_annexure(
         gstNo=customer.GSTN if customer else None,
         contactPerson=contact.contactPersonName if contact else None,
         contactPersonNumber=(contact.officePhone or contact.personalPhone) if contact else None,
-        billingAddress=contact.address if contact else None,
-        consigneeAddress=site.addressLine if site else None,
+        billingAddress=billing_address_text,
+        consigneeAddress=consignee_address_text,
 
         # Diawise breakup snapshot (JSON)
         diawiseBreakup=json.dumps(compute_diawise_breakup(active_lines)),
@@ -268,3 +331,173 @@ def generate_annexure(
     db.flush()
     db.refresh(annexure)
     return annexure
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Time-travel: list versions + restore past version
+# ---------------------------------------------------------------------------
+
+# Body columns cloned from a past annexure version into the restored
+# head. Identity (annexureId), audit, status (becomes Draft), and
+# parent/version pointers are set explicitly by ``restore_annexure_version``.
+_ANNEXURE_CLONE_COLUMNS = (
+    "viabilityId",
+    "clientName", "customerPONo", "customerPODate",
+    "totalBillableAmount", "totalQuantityMT", "addressedTo",
+    "invoicing", "transportationMode", "tcType", "paymentTerms",
+    "loadabilityQty", "transportChargesPerMT", "transportChargesFOR",
+    "specificLength", "tolerance", "deliverySchedule",
+    "transportRealizationPerMT",
+    "panNo", "gstNo", "contactPerson", "contactPersonNumber",
+    "billingAddress", "consigneeAddress",
+    "qualityFe", "qualityStandard", "qualityStandardLength",
+    "companyName", "billsTo",
+    "totalOutstanding", "overdueOutstanding",
+    "diawiseBreakup",
+    "unloadingScope", "unloadingRate", "remarks",
+    "preparedByUserId", "preparedByName",
+    "checkedByUserId", "checkedByName",
+)
+
+
+def re_source_annexure_from_upstream(
+    db: Session,
+    *,
+    quotation: QuotSummary,
+    user_id: int,
+) -> QuotAnnexure:
+    """Re-source annexure from current quotation + PO + viability heads.
+
+    Archive the current annexure head and run a fresh
+    ``generate_annexure`` against the new upstream state. Updates
+    parentAnnexureId + versionNo on the new row to chain to the
+    previous head.
+    """
+    current_head = (
+        db.query(QuotAnnexure)
+        .filter(
+            QuotAnnexure.quotId == quotation.quotId,
+            QuotAnnexure.isActive == True,  # noqa: E712
+        )
+        .first()
+    )
+    if current_head is not None:
+        current_head.isActive = False
+        current_head.lastupdateby = user_id
+        db.flush()
+
+    # ``generate_annexure`` is idempotent: with no active head, it
+    # builds a fresh one from current upstream state.
+    new_annexure = generate_annexure(
+        db, quotation=quotation, user_id=user_id,
+    )
+
+    max_version = (
+        db.query(func.max(QuotAnnexure.versionNo))
+        .filter(
+            QuotAnnexure.quotId == quotation.quotId,
+            QuotAnnexure.annexureId != new_annexure.annexureId,
+        )
+        .scalar()
+        or 0
+    )
+    chain_root = (
+        db.query(QuotAnnexure)
+        .filter(
+            QuotAnnexure.quotId == quotation.quotId,
+            QuotAnnexure.parentAnnexureId.is_(None),
+            QuotAnnexure.annexureId != new_annexure.annexureId,
+        )
+        .order_by(QuotAnnexure.versionNo.asc())
+        .first()
+    )
+    new_annexure.versionNo = max_version + 1 if max_version else 1
+    new_annexure.parentAnnexureId = (
+        chain_root.annexureId if chain_root else None
+    )
+    db.flush()
+    db.refresh(new_annexure)
+    return new_annexure
+
+
+def list_annexure_versions(
+    db: Session, quotation: QuotSummary,
+) -> List[QuotAnnexure]:
+    """Return every version of the annexure chain attached to this
+    quotation, head first. Includes archived past versions."""
+    return (
+        db.query(QuotAnnexure)
+        .filter(QuotAnnexure.quotId == quotation.quotId)
+        .order_by(QuotAnnexure.versionNo.desc())
+        .all()
+    )
+
+
+def restore_annexure_version(
+    db: Session,
+    quotation: QuotSummary,
+    target_annexure_id: int,
+    *,
+    user_id: int,
+) -> QuotAnnexure:
+    """Clone an archived annexure forward as a new head. Same shape
+    as the PO + Viability restore helpers — archive current head,
+    MAX-versionNo +1, copy body fields, set status='Draft'. Approval
+    audit fields (``approvedByUserId / Name / on``) are deliberately
+    NOT carried forward — the restored row is a fresh draft that
+    needs re-sign-off."""
+    target = (
+        db.query(QuotAnnexure)
+        .filter(
+            QuotAnnexure.annexureId == target_annexure_id,
+            QuotAnnexure.quotId == quotation.quotId,
+        )
+        .first()
+    )
+    if target is None:
+        raise ValueError(
+            f"Annexure version {target_annexure_id} not found on this quotation."
+        )
+
+    current_head = (
+        db.query(QuotAnnexure)
+        .filter(
+            QuotAnnexure.quotId == quotation.quotId,
+            QuotAnnexure.isActive == True,  # noqa: E712
+        )
+        .first()
+    )
+    if current_head is not None:
+        current_head.isActive = False
+        current_head.lastupdateby = user_id
+        db.flush()
+
+    max_version = (
+        db.query(func.max(QuotAnnexure.versionNo))
+        .filter(QuotAnnexure.quotId == quotation.quotId)
+        .scalar()
+        or 0
+    )
+    chain_root = (
+        db.query(QuotAnnexure)
+        .filter(
+            QuotAnnexure.quotId == quotation.quotId,
+            QuotAnnexure.parentAnnexureId.is_(None),
+        )
+        .order_by(QuotAnnexure.versionNo.asc())
+        .first()
+    )
+
+    new_row = QuotAnnexure(
+        companyId=quotation.companyId,
+        quotId=quotation.quotId,
+        parentAnnexureId=chain_root.annexureId if chain_root else None,
+        versionNo=max_version + 1,
+        status="Draft",
+        createdby=user_id,
+        **{col: getattr(target, col, None) for col in _ANNEXURE_CLONE_COLUMNS},
+    )
+    db.add(new_row)
+    db.flush()
+    db.refresh(new_row)
+    return new_row

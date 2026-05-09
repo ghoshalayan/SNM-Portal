@@ -70,6 +70,18 @@ class EffectiveSettings:
     # System Knowledge Hub — admin-curated context appended to the
     # agent's system prompt. ``None`` means no extras block.
     domain_knowledge: Optional[str] = None
+    # Pre-flight Planner ↔ Resolver loop knobs (resolved with defaults
+    # so chat_service can call them without null-checking each one).
+    preflight_enabled: bool = True
+    preflight_max_rounds: int = 5
+    preflight_user_escalations: int = 2
+    # Phase B2 — how many of the most recent (user, assistant) message
+    # pairs to feed back into the agent on each chat turn so it can
+    # follow up "now group that by region" / "and only for last
+    # quarter". 0 disables threading entirely. Resolved env-only for
+    # now; KpiSettings DB column can be added later if admins want a
+    # UI toggle.
+    chat_history_turns: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +220,38 @@ def get_effective(
         )
 
     domain_knowledge = (row.domain_knowledge or "").strip() if row else ""
+
+    # Pre-flight knobs. Resolution order: DB row → env var → True.
+    # The env-var fallback exists so tests + ops can disable the loop
+    # without writing to the DB; explicit DB value (including 0/False)
+    # still takes precedence so admins can override env from the
+    # Settings UI.
+    if row and row.preflight_enabled is not None:
+        pf_enabled = bool(row.preflight_enabled)
+    else:
+        env_pf = (env.get("KPI_PREFLIGHT_ENABLED") or "").strip().lower()
+        if env_pf in ("0", "false", "no", "off"):
+            pf_enabled = False
+        else:
+            pf_enabled = True
+    pf_rounds = (
+        int(row.preflight_max_rounds) if (row and row.preflight_max_rounds) else 5
+    )
+    pf_escalations = (
+        int(row.preflight_user_escalations) if (row and row.preflight_user_escalations) else 2
+    )
+    # Clamp to the user-stated 5..10 range so a stray DB value can't
+    # drive the loop into pathological territory.
+    pf_rounds = max(1, min(10, pf_rounds))
+    pf_escalations = max(0, min(5, pf_escalations))
+
+    # Chat history threading — env-only for now (no DB column). Clamp
+    # to 0..10 so a typo in the env can't blow the prompt up.
+    chat_history_turns = _pick_int(
+        None, env.get("KPI_CHAT_HISTORY_TURNS"), 3,
+    )
+    chat_history_turns = max(0, min(10, chat_history_turns))
+
     return EffectiveSettings(
         provider=provider,
         provider_name=(provider_name or None),
@@ -218,6 +262,10 @@ def get_effective(
         max_iterations=max_iterations,
         max_tokens_per_call=max_tokens_per_call,
         domain_knowledge=(domain_knowledge or None),
+        preflight_enabled=pf_enabled,
+        preflight_max_rounds=pf_rounds,
+        preflight_user_escalations=pf_escalations,
+        chat_history_turns=chat_history_turns,
     )
 
 
