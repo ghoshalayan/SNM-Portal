@@ -15,6 +15,15 @@ import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
+import {
+  Alignment,
+  ColumnId,
+  DEFAULT_PRINT_STYLE,
+  PrintStyle,
+  formatPrintNumber,
+  formatTaxPercent,
+  resolvePrintStyle,
+} from './print-style.helpers';
 
 export interface PrintQuotation {
   quotId: number;
@@ -87,6 +96,17 @@ interface QuotFormat {
   qContent?: string;
   qFooter?: string;
   isCurrent: boolean;
+  // Print styling — all optional; when absent the component falls back
+  // to DEFAULT_PRINT_STYLE via resolvePrintStyle().
+  headerBgColor?: string | null;
+  headerTextColor?: string | null;
+  roundingMode?: 'ceiling' | 'floor' | 'round' | null;
+  amountDecimals?: number | null;
+  taxDecimals?: number | null;
+  taxShowPercent?: boolean | null;
+  qtyDecimals?: number | null;
+  dimensionDecimals?: number | null;
+  columnAlignments?: string | null;
 }
 
 interface FormatListItem {
@@ -281,33 +301,34 @@ interface FormatListItem {
 
                 <table class="items-table">
                   <thead>
-                    <tr>
-                      <th class="col-sno">#</th>
-                      <th class="col-grade">Grade</th>
-                      <th class="col-dia">Dia</th>
-                      <th class="col-length">Length</th>
-                      <th class="col-unit">Unit</th>
-                      <th class="col-qty">Qty</th>
-                      <th class="col-rate">Basic (Rs./MT)</th>
-                      <th class="col-tax" *ngIf="useIGST">IGST%</th>
-                      <th class="col-tax" *ngIf="!useIGST">CGST%</th>
-                      <th class="col-tax" *ngIf="!useIGST">SGST%</th>
-                      <th class="col-total">{{ amountColumnLabel }}</th>
+                    <tr [style.background-color]="printStyle.headerBgColor"
+                        [style.color]="printStyle.headerTextColor">
+                      <th class="col-sno"  [style.text-align]="hAlign('sno')">#</th>
+                      <th class="col-grade" [style.text-align]="hAlign('grade')">Grade</th>
+                      <th class="col-dia"  [style.text-align]="hAlign('dia')">Dia</th>
+                      <th class="col-length" [style.text-align]="hAlign('length')">Length</th>
+                      <th class="col-unit" [style.text-align]="hAlign('unit')">Unit</th>
+                      <th class="col-qty"  [style.text-align]="hAlign('qty')">Qty</th>
+                      <th class="col-rate" [style.text-align]="hAlign('basicRate')">Basic (Rs./MT)</th>
+                      <th class="col-tax" *ngIf="useIGST"  [style.text-align]="hAlign('igst')">IGST%</th>
+                      <th class="col-tax" *ngIf="!useIGST" [style.text-align]="hAlign('cgst')">CGST%</th>
+                      <th class="col-tax" *ngIf="!useIGST" [style.text-align]="hAlign('sgst')">SGST%</th>
+                      <th class="col-total" [style.text-align]="hAlign('finalPrice')">{{ amountColumnLabel }}</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr *ngFor="let item of details; let i = index">
-                      <td class="center">{{ i + 1 }}</td>
-                      <td>{{ item.itemGradeName }}</td>
-                      <td class="center">{{ item.itemDia }}</td>
-                      <td class="center">{{ item.itemLength }}</td>
-                      <td class="center">{{ item.itemUnit }}</td>
-                      <td class="right">{{ item.quantity | number }}</td>
-                      <td class="right">{{ item.totRate | number:'1.2-2' }}</td>
-                      <td class="center" *ngIf="useIGST">{{ item.IGST | number:'1.2-2' }}</td>
-                      <td class="center" *ngIf="!useIGST">{{ item.CGST | number:'1.2-2' }}</td>
-                      <td class="center" *ngIf="!useIGST">{{ item.SGST | number:'1.2-2' }}</td>
-                      <td class="right amount">{{ item.totAmount | number:'1.2-2' }}</td>
+                      <td [style.text-align]="bAlign('sno')">{{ i + 1 }}</td>
+                      <td [style.text-align]="bAlign('grade')">{{ item.itemGradeName }}</td>
+                      <td [style.text-align]="bAlign('dia')">{{ formatDimension(item.itemDia) }}</td>
+                      <td [style.text-align]="bAlign('length')">{{ formatDimension(item.itemLength) }}</td>
+                      <td [style.text-align]="bAlign('unit')">{{ item.itemUnit }}</td>
+                      <td [style.text-align]="bAlign('qty')">{{ formatQty(item.quantity) }}</td>
+                      <td [style.text-align]="bAlign('basicRate')">{{ formatAmount(item.totRate) }}</td>
+                      <td *ngIf="useIGST"  [style.text-align]="bAlign('igst')">{{ formatTax(item.IGST) }}</td>
+                      <td *ngIf="!useIGST" [style.text-align]="bAlign('cgst')">{{ formatTax(item.CGST) }}</td>
+                      <td *ngIf="!useIGST" [style.text-align]="bAlign('sgst')">{{ formatTax(item.SGST) }}</td>
+                      <td class="amount" [style.text-align]="bAlign('finalPrice')">{{ formatAmount(item.totAmount) }}</td>
                     </tr>
                     <tr *ngIf="details.length === 0">
                       <td [attr.colspan]="useIGST ? 9 : 10" class="center no-items">No items.</td>
@@ -316,7 +337,7 @@ interface FormatListItem {
                   <tfoot>
                     <tr class="total-row">
                       <td [attr.colspan]="useIGST ? 8 : 9" class="right total-label">Grand Total</td>
-                      <td class="right total-amount">&#8377; {{ grandTotal | number:'1.2-2' }}</td>
+                      <td class="right total-amount">&#8377; {{ formatAmount(grandTotal) }}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -532,6 +553,10 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
   allFormats: FormatListItem[] = [];
   private formatsCache = new Map<number, QuotFormat>();
 
+  /** Resolved print styling for the active format. Always non-null —
+   *  starts at DEFAULT_PRINT_STYLE and is replaced on format change. */
+  printStyle: PrintStyle = DEFAULT_PRINT_STYLE;
+
   selectedFormatId: number = 0;
   headerOnAllPages = false;
   footerOnAllPages = false;
@@ -573,6 +598,43 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
 
   mmLabel(value: number): string {
     return `${value}`;
+  }
+
+  // ===== Print-styling helpers =====
+
+  /** Header alignment for a column (drives `<th>` text-align). */
+  hAlign(col: ColumnId): Alignment {
+    return this.printStyle.columnAlignments[col]?.header ?? 'left';
+  }
+
+  /** Body alignment for a column (drives `<td>` text-align). */
+  bAlign(col: ColumnId): Alignment {
+    return this.printStyle.columnAlignments[col]?.body ?? 'left';
+  }
+
+  /** Format an amount-class value (rates, line totals, grand total). */
+  formatAmount(value: number | null | undefined): string {
+    return formatPrintNumber(value, this.printStyle.amountDecimals, this.printStyle.roundingMode);
+  }
+
+  /** Format a tax percentage with optional `%` suffix. */
+  formatTax(value: number | null | undefined): string {
+    return formatTaxPercent(
+      value,
+      this.printStyle.taxDecimals,
+      this.printStyle.roundingMode,
+      this.printStyle.taxShowPercent,
+    );
+  }
+
+  /** Format a quantity value. */
+  formatQty(value: number | null | undefined): string {
+    return formatPrintNumber(value, this.printStyle.qtyDecimals, this.printStyle.roundingMode);
+  }
+
+  /** Format a dimension value (Dia, Length). */
+  formatDimension(value: number | null | undefined): string {
+    return formatPrintNumber(value, this.printStyle.dimensionDecimals, this.printStyle.roundingMode);
   }
 
   constructor(
@@ -644,7 +706,7 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
     print-color-adjust: exact !important;
   }
 
-  .items-table thead tr { background-color: #1565c0 !important; color: #fff !important; }
+  .items-table thead tr { background-color: ${this.printStyle.headerBgColor} !important; color: ${this.printStyle.headerTextColor} !important; }
   .document-title { color: #1565c0 !important; }
   .company-name { color: #1565c0 !important; }
 }
@@ -711,19 +773,25 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
 
   private applyFormat(fmt: QuotFormat): void {
     this.activeFormat = fmt;
+    // Resolve before rendering placeholders — the programmatic items
+    // table uses printStyle to format numbers and align cells.
+    this.printStyle = resolvePrintStyle(fmt);
     this.renderedHeader = fmt.qHeader
       ? this.sanitizer.bypassSecurityTrustHtml(this.replacePlaceholders(fmt.qHeader)) : null;
     this.renderedContent = fmt.qContent
       ? this.sanitizer.bypassSecurityTrustHtml(this.replacePlaceholders(fmt.qContent)) : null;
     this.renderedFooter = fmt.qFooter
       ? this.sanitizer.bypassSecurityTrustHtml(this.replacePlaceholders(fmt.qFooter)) : null;
+    this.updatePageStyle();
   }
 
   private applyDefault(): void {
     this.activeFormat = null;
+    this.printStyle = DEFAULT_PRINT_STYLE;
     this.renderedHeader = null;
     this.renderedContent = null;
     this.renderedFooter = null;
+    this.updatePageStyle();
   }
 
   /** HTML-escape a string so it cannot break out of text/attribute context.
@@ -767,8 +835,7 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
       '{{deliveryMode}}': q.deliveryMode || '',
       '{{refQuotNo}}': q.refQuotNo || '',
       '{{remarks}}': q.remarks || '',
-      '{{grandTotal}}': '₹ ' + this.grandTotal.toLocaleString('en-IN',
-        { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      '{{grandTotal}}': '₹ ' + this.formatAmount(this.grandTotal),
       '{{companyName}}': q.companyName || '',
       '{{companyAddress}}': q.companyAddress || '',
       '{{companyGSTN}}': q.companyGSTN || '',
@@ -804,57 +871,61 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
   private buildLineItemsHtml(includeGrandTotal = true): string {
     if (this.details.length === 0) return '<p>No line items.</p>';
     const igst = this.useIGST;
+    const ps = this.printStyle;
     const th = 'padding:6px;';
+    // Helper closures that emit "text-align:X;" strings from the active
+    // alignment map. Keeps the template literal below readable.
+    const hA = (col: ColumnId) => `text-align:${this.hAlign(col)};`;
+    const bA = (col: ColumnId) => `text-align:${this.bAlign(col)};`;
     const gstH = igst
-      ? `<th style="${th}text-align:center;">IGST%</th>`
-      : `<th style="${th}text-align:center;">CGST%</th><th style="${th}text-align:center;">SGST%</th>`;
+      ? `<th style="${th}${hA('igst')}">IGST%</th>`
+      : `<th style="${th}${hA('cgst')}">CGST%</th><th style="${th}${hA('sgst')}">SGST%</th>`;
     let html = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
-      <thead><tr style="background-color:#1565c0;color:#fff;">
-        <th style="${th}text-align:left;">#</th>
-        <th style="${th}text-align:left;">Item</th>
-        <th style="${th}text-align:left;">Grade</th>
-        <th style="${th}text-align:center;">Dia</th>
-        <th style="${th}text-align:center;">Length</th>
-        <th style="${th}text-align:center;">Unit</th>
-        <th style="${th}text-align:right;">Qty</th>
-        <th style="${th}text-align:right;">Basic (Rs./MT)</th>
+      <thead><tr style="background-color:${ps.headerBgColor};color:${ps.headerTextColor};">
+        <th style="${th}${hA('sno')}">#</th>
+        <th style="${th}${hA('itemName')}">Item</th>
+        <th style="${th}${hA('grade')}">Grade</th>
+        <th style="${th}${hA('dia')}">Dia</th>
+        <th style="${th}${hA('length')}">Length</th>
+        <th style="${th}${hA('unit')}">Unit</th>
+        <th style="${th}${hA('qty')}">Qty</th>
+        <th style="${th}${hA('basicRate')}">Basic (Rs./MT)</th>
         ${gstH}
-        <th style="${th}text-align:right;">${this.amountColumnLabel}</th>
-        <th style="${th}text-align:left;">Mode of Dispatch</th>
+        <th style="${th}${hA('finalPrice')}">${this.amountColumnLabel}</th>
+        <th style="${th}${hA('modeOfDispatch')}">Mode of Dispatch</th>
       </tr></thead><tbody>`;
     const td = 'padding:5px 6px;border-bottom:1px solid #e0e0e0;';
     this.details.forEach((d, i) => {
       const bg = i % 2 === 1 ? 'background:#f9f9f9;' : '';
       const gc = igst
-        ? `<td style="${td}${bg}text-align:center;">${d.IGST?.toFixed(2) ?? ''}</td>`
-        : `<td style="${td}${bg}text-align:center;">${d.CGST?.toFixed(2) ?? ''}</td>
-           <td style="${td}${bg}text-align:center;">${d.SGST?.toFixed(2) ?? ''}</td>`;
+        ? `<td style="${td}${bg}${bA('igst')}">${this.formatTax(d.IGST)}</td>`
+        : `<td style="${td}${bg}${bA('cgst')}">${this.formatTax(d.CGST)}</td>
+           <td style="${td}${bg}${bA('sgst')}">${this.formatTax(d.SGST)}</td>`;
       // Free-text fields (itemName, itemGradeName, itemUnit, modeOfDispatch)
       // come straight from the API and ride into a sanitizer-bypassed HTML
-      // blob downstream. Escape them; numeric fields formatted with
-      // `.toFixed()` / `??` are safe by construction.
+      // blob downstream. Escape them; numeric fields formatted with the
+      // print-style helpers are safe by construction.
       html += `<tr>
-        <td style="${td}${bg}text-align:center;">${i + 1}</td>
-        <td style="${td}${bg}">${this.escapeHtml(d.itemName || '')}</td>
-        <td style="${td}${bg}">${this.escapeHtml(d.itemGradeName || '')}</td>
-        <td style="${td}${bg}text-align:center;">${d.itemDia || ''}</td>
-        <td style="${td}${bg}text-align:center;">${d.itemLength || ''}</td>
-        <td style="${td}${bg}text-align:center;">${this.escapeHtml(d.itemUnit || '')}</td>
-        <td style="${td}${bg}text-align:right;">${d.quantity ?? ''}</td>
-        <td style="${td}${bg}text-align:right;">${d.totRate?.toFixed(2) ?? ''}</td>
+        <td style="${td}${bg}${bA('sno')}">${i + 1}</td>
+        <td style="${td}${bg}${bA('itemName')}">${this.escapeHtml(d.itemName || '')}</td>
+        <td style="${td}${bg}${bA('grade')}">${this.escapeHtml(d.itemGradeName || '')}</td>
+        <td style="${td}${bg}${bA('dia')}">${this.formatDimension(d.itemDia)}</td>
+        <td style="${td}${bg}${bA('length')}">${this.formatDimension(d.itemLength)}</td>
+        <td style="${td}${bg}${bA('unit')}">${this.escapeHtml(d.itemUnit || '')}</td>
+        <td style="${td}${bg}${bA('qty')}">${this.formatQty(d.quantity)}</td>
+        <td style="${td}${bg}${bA('basicRate')}">${this.formatAmount(d.totRate)}</td>
         ${gc}
-        <td style="${td}${bg}text-align:right;font-weight:500;">${d.totAmount?.toFixed(2) ?? ''}</td>
-        <td style="${td}${bg}">${this.escapeHtml(d.modeOfDispatch || '')}</td>
+        <td style="${td}${bg}${bA('finalPrice')}font-weight:500;">${this.formatAmount(d.totAmount)}</td>
+        <td style="${td}${bg}${bA('modeOfDispatch')}">${this.escapeHtml(d.modeOfDispatch || '')}</td>
       </tr>`;
     });
     html += `</tbody>`;
     if (includeGrandTotal) {
       const cs = igst ? 10 : 11;  // +2 for Item + Dispatch columns
-      const gt = this.grandTotal.toLocaleString('en-IN',
-        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      html += `<tfoot><tr style="border-top:2px solid #1565c0;background:#f0f4ff;">
+      const gt = this.formatAmount(this.grandTotal);
+      html += `<tfoot><tr style="border-top:2px solid ${ps.headerBgColor};background:#f0f4ff;">
         <td colspan="${cs}" style="padding:8px 6px;text-align:right;font-weight:700;">Grand Total</td>
-        <td style="padding:8px 6px;text-align:right;font-weight:700;color:#1565c0;">₹ ${gt}</td>
+        <td style="padding:8px 6px;text-align:right;font-weight:700;color:${ps.headerBgColor};">₹ ${gt}</td>
       </tr></tfoot>`;
     }
     html += `</table>`;

@@ -1,6 +1,6 @@
 import { Component, Inject, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ReactiveFormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { ReactiveFormsModule, FormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { MatDialogModule, MatDialogRef, MAT_DIALOG_DATA } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
@@ -9,9 +9,24 @@ import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatTabsModule } from '@angular/material/tabs';
 import { MatIconModule } from '@angular/material/icon';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatSelectModule } from '@angular/material/select';
+import { MatRadioModule } from '@angular/material/radio';
 import { QuillRichEditorComponent } from '../../../shared/components/quill-editor/quill-rich-editor.component';
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
+import {
+  Alignment,
+  ColumnAlignment,
+  ColumnId,
+  COLUMN_LABELS,
+  COLUMN_ORDER,
+  DEFAULT_PRINT_STYLE,
+  PrintStyle,
+  RoundingMode,
+  formatPrintNumber,
+  formatTaxPercent,
+  resolvePrintStyle,
+} from '../../quotations/quotation-print/print-style.helpers';
 
 const PLACEHOLDERS = [
   { token: '{{quotNo}}', desc: 'Quotation Number', group: 'Quotation' },
@@ -59,6 +74,7 @@ const PLACEHOLDERS = [
   imports: [
     CommonModule,
     ReactiveFormsModule,
+    FormsModule,
     MatDialogModule,
     MatFormFieldModule,
     MatInputModule,
@@ -67,6 +83,8 @@ const PLACEHOLDERS = [
     MatTabsModule,
     MatIconModule,
     MatTooltipModule,
+    MatSelectModule,
+    MatRadioModule,
     QuillRichEditorComponent,
   ],
   template: `
@@ -179,6 +197,187 @@ const PLACEHOLDERS = [
                 </div>
               </mat-tab>
 
+              <mat-tab>
+                <ng-template mat-tab-label>
+                  <mat-icon>palette</mat-icon> Print Styling
+                </ng-template>
+                <div class="editor-pane styling-pane">
+
+                  <div class="styling-header">
+                    <div class="editor-hint">
+                      Controls how the items table renders on the printed
+                      quotation. Changes apply only when this format is
+                      selected on the print page.
+                    </div>
+                    <button mat-stroked-button type="button" (click)="resetStylingDefaults()"
+                            matTooltip="Restore the factory defaults: blue header, white text, 0 decimals, ceiling rounding.">
+                      <mat-icon>restart_alt</mat-icon> Reset to Defaults
+                    </button>
+                  </div>
+
+                  <!-- Header colors -->
+                  <section class="styling-section">
+                    <h4>Header Colors</h4>
+                    <div class="row two-col">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Header Background</mat-label>
+                        <input matInput formControlName="headerBgColor"
+                               placeholder="e.g. saffron or #FF9933" />
+                        <input matSuffix type="color" class="color-swatch"
+                               [value]="resolveHexForSwatch(form.value.headerBgColor || '#1565c0')"
+                               (input)="form.controls['headerBgColor'].setValue($any($event.target).value)" />
+                      </mat-form-field>
+                      <mat-form-field appearance="outline">
+                        <mat-label>Header Text Color</mat-label>
+                        <input matInput formControlName="headerTextColor"
+                               placeholder="e.g. white or #FFFFFF" />
+                        <input matSuffix type="color" class="color-swatch"
+                               [value]="resolveHexForSwatch(form.value.headerTextColor || '#FFFFFF')"
+                               (input)="form.controls['headerTextColor'].setValue($any($event.target).value)" />
+                      </mat-form-field>
+                    </div>
+                    <p class="micro-hint">
+                      Accepts any CSS color name (<code>cornflowerblue</code>) or
+                      hex code (<code>#FF9933</code>). Typos render as black.
+                    </p>
+                  </section>
+
+                  <!-- Number formatting -->
+                  <section class="styling-section">
+                    <h4>Number Formatting</h4>
+                    <div class="row four-col">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Rounding Mode</mat-label>
+                        <mat-select formControlName="roundingMode">
+                          <mat-option value="ceiling">Ceiling (1.01 → 2)</mat-option>
+                          <mat-option value="floor">Floor (1.99 → 1)</mat-option>
+                          <mat-option value="round">Round (Half-Up)</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                      <mat-form-field appearance="outline">
+                        <mat-label>Amount Decimals</mat-label>
+                        <mat-select formControlName="amountDecimals">
+                          <mat-option [value]="0">0</mat-option>
+                          <mat-option [value]="1">1</mat-option>
+                          <mat-option [value]="2">2</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                      <mat-form-field appearance="outline">
+                        <mat-label>Tax Decimals</mat-label>
+                        <mat-select formControlName="taxDecimals">
+                          <mat-option [value]="0">0</mat-option>
+                          <mat-option [value]="1">1</mat-option>
+                          <mat-option [value]="2">2</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                      <mat-form-field appearance="outline">
+                        <mat-label>Qty Decimals</mat-label>
+                        <mat-select formControlName="qtyDecimals">
+                          <mat-option [value]="0">0</mat-option>
+                          <mat-option [value]="1">1</mat-option>
+                          <mat-option [value]="2">2</mat-option>
+                          <mat-option [value]="3">3</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                    </div>
+                    <div class="row two-col">
+                      <mat-form-field appearance="outline">
+                        <mat-label>Dimension Decimals (Dia/Length)</mat-label>
+                        <mat-select formControlName="dimensionDecimals">
+                          <mat-option [value]="0">0</mat-option>
+                          <mat-option [value]="1">1</mat-option>
+                        </mat-select>
+                      </mat-form-field>
+                      <mat-slide-toggle formControlName="taxShowPercent" color="primary"
+                                        class="row-toggle">
+                        Show <code>%</code> suffix on tax columns
+                      </mat-slide-toggle>
+                    </div>
+                  </section>
+
+                  <!-- Column alignment grid -->
+                  <section class="styling-section">
+                    <h4>Column Alignment</h4>
+                    <p class="micro-hint">
+                      Pick header and body alignment per column. Header
+                      and body can differ — some teams prefer centered
+                      headers above right-aligned numbers.
+                    </p>
+                    <div class="align-grid">
+                      <div class="align-grid-head">
+                        <span>Column</span>
+                        <span>Header</span>
+                        <span>Body</span>
+                      </div>
+                      <div class="align-grid-row" *ngFor="let col of columnOrder">
+                        <span class="col-label">{{ columnLabels[col] }}</span>
+                        <mat-radio-group [value]="columnAlignments[col].header"
+                                         (change)="setAlignment(col, 'header', $event.value)"
+                                         class="align-radios">
+                          <mat-radio-button value="left" matTooltip="Left">
+                            <mat-icon>format_align_left</mat-icon>
+                          </mat-radio-button>
+                          <mat-radio-button value="center" matTooltip="Center">
+                            <mat-icon>format_align_center</mat-icon>
+                          </mat-radio-button>
+                          <mat-radio-button value="right" matTooltip="Right">
+                            <mat-icon>format_align_right</mat-icon>
+                          </mat-radio-button>
+                        </mat-radio-group>
+                        <mat-radio-group [value]="columnAlignments[col].body"
+                                         (change)="setAlignment(col, 'body', $event.value)"
+                                         class="align-radios">
+                          <mat-radio-button value="left" matTooltip="Left">
+                            <mat-icon>format_align_left</mat-icon>
+                          </mat-radio-button>
+                          <mat-radio-button value="center" matTooltip="Center">
+                            <mat-icon>format_align_center</mat-icon>
+                          </mat-radio-button>
+                          <mat-radio-button value="right" matTooltip="Right">
+                            <mat-icon>format_align_right</mat-icon>
+                          </mat-radio-button>
+                        </mat-radio-group>
+                      </div>
+                    </div>
+                  </section>
+
+                  <!-- Live preview -->
+                  <section class="styling-section">
+                    <h4>Live Preview</h4>
+                    <div class="preview-box">
+                      <table class="preview-table">
+                        <thead>
+                          <tr [style.background-color]="livePreviewStyle.headerBgColor"
+                              [style.color]="livePreviewStyle.headerTextColor">
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.sno.header">#</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.grade.header">Grade</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.dia.header">Dia</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.length.header">Length</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.qty.header">Qty</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.basicRate.header">Basic</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.igst.header">IGST</th>
+                            <th [style.text-align]="livePreviewStyle.columnAlignments.finalPrice.header">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr *ngFor="let row of previewRows; let i = index">
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.sno.body">{{ i + 1 }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.grade.body">{{ row.grade }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.dia.body">{{ formatDim(row.dia) }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.length.body">{{ formatDim(row.length) }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.qty.body">{{ formatQ(row.qty) }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.basicRate.body">{{ formatA(row.basic) }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.igst.body">{{ formatT(row.igst) }}</td>
+                            <td [style.text-align]="livePreviewStyle.columnAlignments.finalPrice.body">{{ formatA(row.total) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                </div>
+              </mat-tab>
+
             </mat-tab-group>
           </div>
 
@@ -199,11 +398,17 @@ const PLACEHOLDERS = [
   styles: [`
     .dialog-header {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 24px; border-bottom: 1px solid #e0e0e0; background: #fafafa;
+      padding: 10px 24px;
+      border-bottom: 1px solid var(--snm-border-divider);
+      background: var(--snm-bg-panel);
+      color: var(--snm-text-primary);
     }
     .header-left { display: flex; align-items: center; gap: 10px; }
-    .header-left h2 { margin: 0; font-size: 18px; font-weight: 600; }
-    .header-icon { color: #1565c0; }
+    .header-left h2 {
+      margin: 0; font-size: 18px; font-weight: 600;
+      color: var(--snm-text-primary);
+    }
+    .header-icon { color: var(--snm-accent); }
 
     .fullscreen-content {
       max-height: none !important;
@@ -222,31 +427,44 @@ const PLACEHOLDERS = [
     /* Sidebar */
     .sidebar {
       width: 260px; min-width: 260px;
-      border-right: 1px solid #e0e0e0;
-      padding: 16px 14px; overflow-y: auto; background: #fafbfc;
+      border-right: 1px solid var(--snm-border-divider);
+      padding: 16px 14px; overflow-y: auto;
+      background: var(--snm-bg-panel);
+      color: var(--snm-text-primary);
     }
     .sidebar-section { margin-bottom: 20px; }
     .sidebar-section h3 {
       font-size: 12px; font-weight: 700; text-transform: uppercase;
-      color: #555; letter-spacing: 0.5px; margin: 0 0 10px;
+      color: var(--snm-text-secondary);
+      letter-spacing: 0.5px; margin: 0 0 10px;
       display: flex; align-items: center; gap: 6px;
     }
     .section-icon { font-size: 18px; width: 18px; height: 18px; }
-    .hint { font-size: 11px; color: #888; margin: 0 0 10px; }
+    .hint {
+      font-size: 11px; color: var(--snm-text-muted); margin: 0 0 10px;
+    }
     .full-width { width: 100%; }
     .placeholder-group { margin-bottom: 10px; }
     .group-label {
-      font-size: 10px; font-weight: 600; color: #777;
+      font-size: 10px; font-weight: 600;
+      color: var(--snm-text-muted);
       text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
     }
     .placeholder-chips { display: flex; flex-wrap: wrap; gap: 4px; }
     .placeholder-chip {
       display: inline-block; padding: 2px 7px; font-size: 10px;
       font-family: 'Consolas', 'Courier New', monospace;
-      background: #e8eef4; border: 1px solid #d0d9e3; border-radius: 3px;
-      cursor: pointer; transition: all 0.15s; color: #1565c0;
+      background: var(--snm-accent-subtle, rgba(74, 144, 226, 0.10));
+      border: 1px solid var(--snm-border-field);
+      border-radius: 3px;
+      cursor: pointer; transition: all 0.15s;
+      color: var(--snm-accent-dark, var(--snm-accent));
     }
-    .placeholder-chip:hover { background: #1565c0; color: #fff; border-color: #1565c0; }
+    .placeholder-chip:hover {
+      background: var(--snm-accent);
+      color: var(--snm-text-on-primary, #fff);
+      border-color: var(--snm-accent);
+    }
 
     /* Editor area */
     .editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -258,11 +476,13 @@ const PLACEHOLDERS = [
       height: calc(100vh - 220px);
     }
     .editor-hint {
-      font-size: 12px; color: #777; margin-bottom: 8px; line-height: 1.5;
+      font-size: 12px; color: var(--snm-text-muted);
+      margin-bottom: 8px; line-height: 1.5;
     }
     .editor-hint code {
-      background: #e8eef4; padding: 1px 5px; border-radius: 3px;
-      font-size: 11px; color: #1565c0;
+      background: var(--snm-accent-subtle, rgba(74, 144, 226, 0.10));
+      padding: 1px 5px; border-radius: 3px;
+      font-size: 11px; color: var(--snm-accent-dark, var(--snm-accent));
     }
 
     /* Force mat-tab-body to fill height */
@@ -272,14 +492,118 @@ const PLACEHOLDERS = [
 
     /* Footer */
     .dialog-footer {
-      border-top: 1px solid #e0e0e0;
+      border-top: 1px solid var(--snm-border-divider);
       padding: 8px 24px !important; margin: 0 !important;
       display: flex; align-items: center;
+      background: var(--snm-bg-panel);
     }
     .spacer { flex: 1; }
     .copy-feedback {
-      font-size: 12px; color: #4caf50; font-weight: 500;
+      font-size: 12px; color: var(--snm-success, #4caf50); font-weight: 500;
     }
+
+    /* Print-styling tab */
+    .styling-pane { padding: 16px 20px; }
+    .styling-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 12px; margin-bottom: 16px;
+    }
+    .styling-header .editor-hint { flex: 1; margin: 0; }
+    .styling-section {
+      margin-bottom: 20px;
+      padding: 12px 14px;
+      border: 1px solid var(--snm-border-divider);
+      border-radius: 6px;
+      background: var(--snm-bg-card);
+      color: var(--snm-text-primary);
+    }
+    .styling-section h4 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--snm-text-primary);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .row { display: grid; gap: 12px; }
+    .row.two-col   { grid-template-columns: 1fr 1fr; align-items: center; }
+    .row.four-col  { grid-template-columns: repeat(4, 1fr); }
+    .row mat-form-field { width: 100%; }
+    .row-toggle { padding-left: 4px; }
+    .micro-hint {
+      margin: 4px 0 0;
+      font-size: 11px;
+      color: var(--snm-text-muted);
+      line-height: 1.5;
+    }
+    .micro-hint code {
+      background: var(--snm-accent-subtle, rgba(74, 144, 226, 0.10));
+      padding: 1px 4px; border-radius: 3px;
+      font-size: 11px; color: var(--snm-accent-dark, var(--snm-accent));
+    }
+    .color-swatch {
+      width: 28px; height: 28px; padding: 0;
+      border: 1px solid var(--snm-border-field);
+      border-radius: 4px; cursor: pointer; background: transparent;
+    }
+    /* Column alignment grid */
+    .align-grid {
+      display: flex; flex-direction: column;
+      border: 1px solid var(--snm-border-divider);
+      border-radius: 4px;
+      background: var(--snm-bg-panel);
+      overflow: hidden;
+    }
+    .align-grid-head, .align-grid-row {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr;
+      align-items: center;
+      padding: 6px 10px;
+    }
+    .align-grid-head {
+      background: var(--snm-bg-header-row, var(--snm-bg-panel));
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      color: var(--snm-text-secondary);
+      letter-spacing: 0.4px;
+      border-bottom: 1px solid var(--snm-border-divider);
+    }
+    .align-grid-row { border-top: 1px solid var(--snm-border-divider); }
+    /* Zebra striping via translucent overlay — works on both themes. */
+    .align-grid-row:nth-child(odd) {
+      background: var(--snm-bg-card);
+    }
+    .col-label { font-size: 12px; color: var(--snm-text-primary); }
+    .align-radios { display: flex; gap: 0; }
+    .align-radios mat-radio-button { margin-right: 0; }
+    .align-radios mat-icon {
+      font-size: 16px; width: 16px; height: 16px;
+      vertical-align: middle;
+      color: var(--snm-text-secondary);
+    }
+    /* Live preview — WYSIWYG of the printed output, which is always
+       on white paper. Lock background AND text colors to fixed values
+       so they don't flip with the app theme. Header colors stay driven
+       by the user's chosen headerBgColor / headerTextColor (set via
+       inline [style] bindings in the template). */
+    .preview-box {
+      padding: 12px;
+      background: #fff;
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      overflow-x: auto;
+      color: #1a1a1a;
+    }
+    .preview-table {
+      width: 100%; border-collapse: collapse; font-size: 11px;
+      color: #1a1a1a;
+    }
+    .preview-table tbody td {
+      color: #1a1a1a;
+    }
+    .preview-table th, .preview-table td {
+      padding: 5px 8px; border-bottom: 1px solid #ececec;
+    }
+    .preview-table tbody tr:nth-child(even) { background: #f9f9f9; }
   `],
 })
 export class QuotationFormatDialogComponent implements OnInit {
@@ -293,6 +617,25 @@ export class QuotationFormatDialogComponent implements OnInit {
   editorHeight = Math.max(350, window.innerHeight - 320);
 
   private editId: number | null = null;
+
+  // ===== Print-styling state =====
+  /** Per-column alignment held outside the FormGroup — 26 radio
+   *  groups would be tedious in a deep FormGroup. Bound directly
+   *  via [value]/(change) on the radio buttons; serialized to JSON
+   *  on save. */
+  columnAlignments: Record<ColumnId, ColumnAlignment> = structuredClone(
+    DEFAULT_PRINT_STYLE.columnAlignments,
+  );
+  readonly columnLabels = COLUMN_LABELS;
+  readonly columnOrder = COLUMN_ORDER;
+
+  /** Three sample rows for the live preview — chosen so the user can
+   *  see how decimals, alignment, and rounding interact. */
+  readonly previewRows = [
+    { grade: 'Fe550D', dia: 12,   length: 12,   qty: 5.5,  basic: 53450.78, igst: 18.0, total: 268765.50 },
+    { grade: 'Fe550D', dia: 16,   length: 12,   qty: 12.0, basic: 52950.34, igst: 18.0, total: 624925.12 },
+    { grade: 'Fe550',  dia: 25,   length: 12,   qty: 8.25, basic: 52250.00, igst: 18.0, total: 405531.25 },
+  ];
 
   constructor(
     private fb: FormBuilder,
@@ -316,6 +659,16 @@ export class QuotationFormatDialogComponent implements OnInit {
       qContent: [''],
       qFooter: [''],
       isCurrent: [false],
+      // Print styling defaults — preloaded so a brand-new format
+      // already has a sensible look.
+      headerBgColor: [DEFAULT_PRINT_STYLE.headerBgColor],
+      headerTextColor: [DEFAULT_PRINT_STYLE.headerTextColor],
+      roundingMode: [DEFAULT_PRINT_STYLE.roundingMode],
+      amountDecimals: [DEFAULT_PRINT_STYLE.amountDecimals],
+      taxDecimals: [DEFAULT_PRINT_STYLE.taxDecimals],
+      taxShowPercent: [DEFAULT_PRINT_STYLE.taxShowPercent],
+      qtyDecimals: [DEFAULT_PRINT_STYLE.qtyDecimals],
+      dimensionDecimals: [DEFAULT_PRINT_STYLE.dimensionDecimals],
     });
 
     if (this.data?.qfId) {
@@ -324,13 +677,25 @@ export class QuotationFormatDialogComponent implements OnInit {
       this.loadingDetail = true;
       this.api.get<any>(`/quotation-formats/${this.editId}`).subscribe({
         next: (fmt) => {
+          // Resolve missing/null styling fields against defaults so the
+          // form always has a value to bind.
+          const resolved = resolvePrintStyle(fmt);
           this.form.patchValue({
             formatName: fmt.formatName,
             qHeader: fmt.qHeader || '',
             qContent: fmt.qContent || '',
             qFooter: fmt.qFooter || '',
             isCurrent: fmt.isCurrent,
+            headerBgColor: resolved.headerBgColor,
+            headerTextColor: resolved.headerTextColor,
+            roundingMode: resolved.roundingMode,
+            amountDecimals: resolved.amountDecimals,
+            taxDecimals: resolved.taxDecimals,
+            taxShowPercent: resolved.taxShowPercent,
+            qtyDecimals: resolved.qtyDecimals,
+            dimensionDecimals: resolved.dimensionDecimals,
           });
+          this.columnAlignments = resolved.columnAlignments;
           this.loadingDetail = false;
         },
         error: () => {
@@ -338,6 +703,87 @@ export class QuotationFormatDialogComponent implements OnInit {
           this.dialogRef.close();
         },
       });
+    }
+  }
+
+  // ===== Print-styling helpers (template-bound) =====
+
+  setAlignment(col: ColumnId, place: 'header' | 'body', value: Alignment): void {
+    this.columnAlignments = {
+      ...this.columnAlignments,
+      [col]: { ...this.columnAlignments[col], [place]: value },
+    };
+  }
+
+  resetStylingDefaults(): void {
+    this.form.patchValue({
+      headerBgColor: DEFAULT_PRINT_STYLE.headerBgColor,
+      headerTextColor: DEFAULT_PRINT_STYLE.headerTextColor,
+      roundingMode: DEFAULT_PRINT_STYLE.roundingMode,
+      amountDecimals: DEFAULT_PRINT_STYLE.amountDecimals,
+      taxDecimals: DEFAULT_PRINT_STYLE.taxDecimals,
+      taxShowPercent: DEFAULT_PRINT_STYLE.taxShowPercent,
+      qtyDecimals: DEFAULT_PRINT_STYLE.qtyDecimals,
+      dimensionDecimals: DEFAULT_PRINT_STYLE.dimensionDecimals,
+    });
+    this.columnAlignments = structuredClone(DEFAULT_PRINT_STYLE.columnAlignments);
+  }
+
+  /** Live preview re-resolves on every CD pass — cheap, since the inputs
+   *  are tiny and the helper is pure. */
+  get livePreviewStyle(): PrintStyle {
+    const v = this.form?.value || {};
+    return resolvePrintStyle({
+      headerBgColor: v.headerBgColor,
+      headerTextColor: v.headerTextColor,
+      roundingMode: v.roundingMode,
+      amountDecimals: v.amountDecimals,
+      taxDecimals: v.taxDecimals,
+      taxShowPercent: v.taxShowPercent,
+      qtyDecimals: v.qtyDecimals,
+      dimensionDecimals: v.dimensionDecimals,
+      columnAlignments: this.columnAlignments,
+    });
+  }
+
+  formatA(value: number): string {
+    const s = this.livePreviewStyle;
+    return formatPrintNumber(value, s.amountDecimals, s.roundingMode);
+  }
+  formatT(value: number): string {
+    const s = this.livePreviewStyle;
+    return formatTaxPercent(value, s.taxDecimals, s.roundingMode, s.taxShowPercent);
+  }
+  formatQ(value: number): string {
+    const s = this.livePreviewStyle;
+    return formatPrintNumber(value, s.qtyDecimals, s.roundingMode);
+  }
+  formatDim(value: number): string {
+    const s = this.livePreviewStyle;
+    return formatPrintNumber(value, s.dimensionDecimals, s.roundingMode);
+  }
+
+  /** The native ``<input type="color">`` only accepts #rrggbb. When the
+   *  user types a CSS color name (`saffron`, `cornflowerblue`), reflect
+   *  it back to the swatch by resolving via a hidden div's computedStyle.
+   *  Falls back to the input string when resolution fails. */
+  resolveHexForSwatch(value: string): string {
+    if (!value) return '#000000';
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return value.length === 4
+      ? '#' + [...value.slice(1)].map(c => c + c).join('')
+      : value;
+    try {
+      const probe = document.createElement('div');
+      probe.style.color = value;
+      document.body.appendChild(probe);
+      const computed = getComputedStyle(probe).color;
+      document.body.removeChild(probe);
+      const m = computed.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+      if (!m) return '#000000';
+      const hex = (n: string) => parseInt(n, 10).toString(16).padStart(2, '0');
+      return `#${hex(m[1])}${hex(m[2])}${hex(m[3])}`;
+    } catch {
+      return '#000000';
     }
   }
 
@@ -351,7 +797,14 @@ export class QuotationFormatDialogComponent implements OnInit {
   save() {
     if (this.form.invalid) return;
     this.saving = true;
-    const payload = this.form.value;
+    // Serialize columnAlignments alongside the form fields. Stored as a
+    // JSON string on the server; resolvePrintStyle parses it back on
+    // load. Sending the full map (not a delta) keeps server-side merge
+    // logic simple.
+    const payload = {
+      ...this.form.value,
+      columnAlignments: JSON.stringify(this.columnAlignments),
+    };
 
     const call = this.isEdit
       ? this.api.put(`/quotation-formats/${this.editId}`, payload)

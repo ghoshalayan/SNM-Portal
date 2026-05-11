@@ -85,6 +85,18 @@ def create_format(
         qContent=data.qContent,
         qFooter=data.qFooter,
         isCurrent=data.isCurrent,
+        # Print styling — None values fall through to the DB server_default
+        # set in the migration, so the row is consistent regardless of
+        # whether the caller sent these fields.
+        headerBgColor=data.headerBgColor,
+        headerTextColor=data.headerTextColor,
+        roundingMode=data.roundingMode,
+        amountDecimals=data.amountDecimals,
+        taxDecimals=data.taxDecimals,
+        taxShowPercent=data.taxShowPercent,
+        qtyDecimals=data.qtyDecimals,
+        dimensionDecimals=data.dimensionDecimals,
+        columnAlignments=data.columnAlignments,
         createdby=current_user.user_id,
     )
     if data.isCurrent:
