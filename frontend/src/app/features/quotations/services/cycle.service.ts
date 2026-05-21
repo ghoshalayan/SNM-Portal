@@ -124,6 +124,10 @@ export interface ViabilityApprovalSnapshot {
   approvedByUserId: number | null;
   approvedByName: string | null;
   approvedAt: string;
+  /** FWS snapshot's versionNo (or PO version on legacy paths) at the
+   *  time this viability was approved. FE renders as
+   *  "from FWS C{n}-V{m}". */
+  sourcedFromPOVersion?: number | null;
 }
 
 export interface ViabilityApprovalSnapshotList {
@@ -138,6 +142,11 @@ export interface AnnexureApprovalSnapshot {
   approvedByUserId: number | null;
   approvedByName: string | null;
   approvedAt: string;
+  /** Upstream-version pointers captured at approval time. FE renders
+   *  them as "from Viability V{n} · PO {customerPONo}" on each row. */
+  sourcedFromViabilityVersion?: number | null;
+  sourcedFromPOVersion?: number | null;
+  customerPONo?: string | null;
 }
 
 export interface AnnexureApprovalSnapshotList {

@@ -1395,12 +1395,29 @@ export class QuotationFormComponent implements OnInit {
 
   /** Map the cached FWS snapshot list into the inline picker's
    *  ``VersionInlineItem`` shape. */
-  get fwsVersionItems(): { id: number; label: string; approvedAt: string | null; approvedByName: string | null }[] {
+  get fwsVersionItems(): {
+    id: number;
+    label: string;
+    approvedAt: string | null;
+    approvedByName: string | null;
+    sourceText: string | null;
+  }[] {
+    const cycleNo = this.selectedCycleNo ?? null;
     return this.fwsSnapshotList.map(s => ({
       id: s.snapshotId,
       label: s.label,
       approvedAt: s.approvedAt,
       approvedByName: s.approvedByName,
+      // FWS doesn't carry an explicit upstream-source pointer per
+      // snapshot, so derive transparency from version order: V1 is
+      // the initial approval, V_n>1 follows V_{n-1}. Lets the user
+      // trace the chain visually without DB-level source tracking.
+      sourceText:
+        s.versionNo > 1 && cycleNo != null
+          ? `follows C${cycleNo}-V${s.versionNo - 1}`
+          : s.versionNo === 1
+            ? 'initial approval'
+            : null,
     }));
   }
 

@@ -570,7 +570,11 @@ def list_annexure_snapshots(
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """List every approval snapshot for this annexure, newest first."""
+    """List every approval snapshot for this annexure, newest first.
+    Each row carries the upstream-version pointers parsed from the
+    snapshot blob (Viability version + PO version + customer PO no) so
+    the FE version picker can render "from Viability V{n} · PO {no}"
+    for transparency over what fed each annexure version."""
     require_permission(MENU, "CanRead", ctx)
     _get_annexure_or_403(db, annexure_id, ctx)
     snaps = (
@@ -582,9 +586,34 @@ def list_annexure_snapshots(
         .order_by(QuotAnnexureApprovalSnapshot.snapshotId.desc())
         .all()
     )
-    return AnnexureApprovalSnapshotList(items=[
-        AnnexureApprovalSnapshotSummary.model_validate(s) for s in snaps
-    ])
+
+    items: list[AnnexureApprovalSnapshotSummary] = []
+    for s in snaps:
+        sourced_from_viab: int | None = None
+        sourced_from_po: int | None = None
+        customer_po_no: str | None = None
+        try:
+            blob = json.loads(s.snapshotData) if s.snapshotData else {}
+            ann_blob = blob.get("annexure") if isinstance(blob, dict) else None
+            if isinstance(ann_blob, dict):
+                sourced_from_viab = ann_blob.get("sourcedFromViabilityVersion")
+                sourced_from_po = ann_blob.get("sourcedFromPOVersion")
+                customer_po_no = ann_blob.get("customerPONo")
+        except (ValueError, TypeError):
+            pass
+        items.append(AnnexureApprovalSnapshotSummary(
+            snapshotId=s.snapshotId,
+            versionNo=s.versionNo,
+            approvedByUserId=s.approvedByUserId,
+            approvedByName=s.approvedByName,
+            approvedAt=s.approvedAt,
+            annexureId=s.annexureId,
+            quotId=s.quotId,
+            sourcedFromViabilityVersion=sourced_from_viab,
+            sourcedFromPOVersion=sourced_from_po,
+            customerPONo=customer_po_no,
+        ))
+    return AnnexureApprovalSnapshotList(items=items)
 
 
 @router.get(

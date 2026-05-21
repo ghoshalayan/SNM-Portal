@@ -36,9 +36,15 @@ class _SnapshotBase(BaseModel):
 # ---- Viability ----------------------------------------------------------
 
 class ViabilityApprovalSnapshotSummary(_SnapshotBase):
-    """Lightweight header row for the history dropdown."""
+    """Lightweight header row for the history dropdown.
+
+    ``sourcedFromPOVersion`` is parsed from the snapshot blob and gives
+    the FE the upstream-version pointer at approval time — used to
+    render "from FWS C{n}-V{m}" in the version picker so the user can
+    see what fed each viability version."""
     viabilityId: int
     quotId: int
+    sourcedFromPOVersion: Optional[int] = None
 
 
 class ViabilityApprovalSnapshotDetail(ViabilityApprovalSnapshotSummary):
@@ -79,8 +85,18 @@ class FWSApprovalSnapshotList(BaseModel):
 # ---- Annexure -----------------------------------------------------------
 
 class AnnexureApprovalSnapshotSummary(_SnapshotBase):
+    """Lightweight header row for the annexure history dropdown.
+
+    Includes the upstream-version pointers parsed from the snapshot
+    blob (sourcedFromViabilityVersion, sourcedFromPOVersion,
+    customerPONo) so the FE can render
+    "from Viability V{n} · PO {customerPONo}" on each row —
+    transparency over what fed each annexure version."""
     annexureId: int
     quotId: int
+    sourcedFromViabilityVersion: Optional[int] = None
+    sourcedFromPOVersion: Optional[int] = None
+    customerPONo: Optional[str] = None
 
 
 class AnnexureApprovalSnapshotDetail(AnnexureApprovalSnapshotSummary):

@@ -39,6 +39,12 @@ export interface VersionInlineItem {
   /** Render an "approved" tick badge on the row. Defaults to true
    *  since every snapshot is an approval point by definition. */
   isApproved?: boolean;
+  /** Optional third metadata line — used to surface upstream-source
+   *  transparency (e.g. "from Viability V3 · PO LOI-26-1" on Annexure
+   *  rows, "from FWS C1-V2" on Viability, "follows C1-V1" on FWS).
+   *  Rendered with a sourcePrefix icon so it's visually distinct from
+   *  the timestamp/approver line. */
+  sourceText?: string | null;
 }
 
 @Component({
@@ -92,6 +98,10 @@ export interface VersionInlineItem {
                 <span *ngIf="v.approvedAt">{{ v.approvedAt | date:'dd-MMM-yyyy' }}</span>
                 <span *ngIf="v.approvedByName"> · by {{ v.approvedByName }}</span>
                 <span *ngIf="!v.approvedAt && !v.approvedByName">no metadata</span>
+              </div>
+              <div *ngIf="v.sourceText" class="vip-row-source">
+                <mat-icon class="vip-source-icon">subdirectory_arrow_right</mat-icon>
+                <span>{{ v.sourceText }}</span>
               </div>
             </div>
           </div>
@@ -176,6 +186,17 @@ export interface VersionInlineItem {
       font-size: 11px;
       color: var(--snm-text-muted);
       margin-top: 2px;
+    }
+    .vip-row-source {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 11px;
+      color: var(--snm-accent-dark);
+      margin-top: 1px;
+      font-style: italic;
+    }
+    .vip-source-icon {
+      font-size: 14px; width: 14px; height: 14px;
+      color: var(--snm-accent);
     }
     button[mat-menu-item].is-active {
       background: rgba(46,125,50,0.06);

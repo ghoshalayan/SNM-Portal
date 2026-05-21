@@ -605,6 +605,7 @@ def list_viability_snapshots(
     Snapshots are append-only (model docstring) so no isActive filter
     is needed here either — every row is valid history.
     """
+    import json
     require_permission(MENU, "CanRead", ctx)
     sheet = _get_sheet_or_403(db, viability_id, ctx)
     snaps = (
@@ -613,9 +614,35 @@ def list_viability_snapshots(
         .order_by(QuotViabilityApprovalSnapshot.snapshotId.desc())
         .all()
     )
-    return ViabilityApprovalSnapshotList(items=[
-        ViabilityApprovalSnapshotSummary.model_validate(s) for s in snaps
-    ])
+
+    # Enrich each summary with the upstream-version pointer parsed
+    # from the blob. The blob carries the full sheet row at approval
+    # time; ``sourcedFromPOVersion`` on that row records which FWS
+    # snapshot's versionNo the lines were sourced from (or the PO's
+    # versionNo on legacy non-snapshot paths). FE renders it as
+    # "from FWS C{n}-V{m}" in the version picker.
+    items: list[ViabilityApprovalSnapshotSummary] = []
+    for s in snaps:
+        sourced_from_po_version: int | None = None
+        try:
+            blob = json.loads(s.snapshotData) if s.snapshotData else {}
+            sheet_blob = blob.get("sheet") if isinstance(blob, dict) else None
+            if isinstance(sheet_blob, dict):
+                sourced_from_po_version = sheet_blob.get("sourcedFromPOVersion")
+        except (ValueError, TypeError):
+            # Malformed blob — skip enrichment, fall back to base fields.
+            pass
+        items.append(ViabilityApprovalSnapshotSummary(
+            snapshotId=s.snapshotId,
+            versionNo=s.versionNo,
+            approvedByUserId=s.approvedByUserId,
+            approvedByName=s.approvedByName,
+            approvedAt=s.approvedAt,
+            viabilityId=s.viabilityId,
+            quotId=s.quotId,
+            sourcedFromPOVersion=sourced_from_po_version,
+        ))
+    return ViabilityApprovalSnapshotList(items=items)
 
 
 @router.get(

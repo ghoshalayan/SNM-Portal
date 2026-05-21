@@ -949,6 +949,14 @@ export class QuotationViabilityComponent implements OnChanges {
       label: `V${s.versionNo}`,
       approvedAt: s.approvedAt,
       approvedByName: s.approvedByName,
+      // Upstream-source transparency. ``sourcedFromPOVersion`` carries
+      // the FWS snapshot's versionNo on the soft-flow path (legacy:
+      // the PO's versionNo). Render with the FWS prefix so the user
+      // knows which working sheet fed this viability draft.
+      sourceText:
+        s.sourcedFromPOVersion != null
+          ? `from FWS V${s.sourcedFromPOVersion}`
+          : null,
     }));
   }
 

@@ -648,14 +648,31 @@ export class QuotationAnnexureComponent implements OnChanges {
   /** True while a version-switch round-trip is in flight. */
   switching = false;
 
-  /** Inline-picker items derived from ``snapshots``. */
+  /** Inline-picker items derived from ``snapshots``. Each row gets a
+   *  ``sourceText`` line summarising the upstream versions captured
+   *  at approval time so the user can trace what fed each annexure
+   *  version straight from the dropdown. */
   get versionItems(): VersionInlineItem[] {
     return this.snapshots.map(s => ({
       id: s.snapshotId,
       label: `V${s.versionNo}`,
       approvedAt: s.approvedAt,
       approvedByName: s.approvedByName,
+      sourceText: this.formatAnnexureSourceText(s),
     }));
+  }
+
+  private formatAnnexureSourceText(s: AnnexureApprovalSnapshot): string | null {
+    const parts: string[] = [];
+    if (s.sourcedFromViabilityVersion != null) {
+      parts.push(`from Viability V${s.sourcedFromViabilityVersion}`);
+    }
+    if (s.customerPONo) {
+      parts.push(`PO ${s.customerPONo}`);
+    } else if (s.sourcedFromPOVersion != null) {
+      parts.push(`PO v${s.sourcedFromPOVersion}`);
+    }
+    return parts.length ? parts.join(' · ') : null;
   }
 
   // Issue #4 — viability-version picker for the Diawise Breakup
