@@ -39,7 +39,7 @@ import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialo
           <div class="stale-msg">{{ message }}</div>
         </div>
         <button mat-stroked-button color="warn" class="stale-btn"
-          *ngIf="canResource"
+          *ngIf="canResource && !hideAction"
           (click)="confirmResource()" [disabled]="busy"
           matTooltip="Refresh this stage by re-running auto-population from the current upstream heads. Creates a new version (audited).">
           @if (busy) {
@@ -49,7 +49,7 @@ import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialo
           }
           Re-source
         </button>
-        <span *ngIf="!canResource" class="stale-perm-hint"
+        <span *ngIf="!canResource && !hideAction" class="stale-perm-hint"
               matTooltip="Re-source needs the same Unlock-and-Edit permission as Restore for this stage.">
           <mat-icon>lock</mat-icon>
         </span>
@@ -112,6 +112,11 @@ export class StaleBannerComponent {
   @Input() busy = false;
   /** Plain-English label for the confirm dialog (e.g. "Purchase Order"). */
   @Input() stageLabel = 'this stage';
+  /** Hide both the Re-source button and the lock-hint icon — for
+   *  hosts that surface a dedicated Re-source action elsewhere (e.g.
+   *  the action cluster on Viability + Annexure). Keeps the banner
+   *  as an informational notice only. */
+  @Input() hideAction = false;
 
   @Output() resource = new EventEmitter<void>();
 

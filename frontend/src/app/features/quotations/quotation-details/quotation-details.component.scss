@@ -199,6 +199,26 @@
   .tp-highlight { background: rgba(25,118,210,.06); }
   .tp-input { border-color: var(--snm-accent, #1976d2) !important; font-weight: 500; }
 
+  // CR #2 — CD + Special Discount columns. Users enter positive values
+  // that the math deducts; the red wash is the visual cue that this
+  // column behaves as a discount, no manual "-" sign needed.
+  th.deducted {
+    background: rgba(229, 57, 53, 0.14) !important;
+    color: #c62828 !important;
+    font-weight: 700;
+  }
+  td.deducted {
+    background: rgba(229, 57, 53, 0.06);
+    color: #c62828;
+  }
+  td.deducted .display-val { color: #c62828; font-weight: 500; }
+  .inline-num.deducted-input {
+    background: rgba(229, 57, 53, 0.10) !important;
+    border-color: #c62828 !important;
+    color: #c62828 !important;
+    font-weight: 600;
+  }
+
   // Locked cells (Freight Trailer / Truck when delivery term ≠ FOR).
   // Diagonal hash + greyed bg makes the read-only state immediately
   // distinguishable from a user-typed 0.

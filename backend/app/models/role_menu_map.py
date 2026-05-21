@@ -43,3 +43,15 @@ class RoleMenuMap(Base, AuditMixin):
     CanUnlockEditPO = Column(Boolean, default=False, nullable=False)
     CanUnlockEditViability = Column(Boolean, default=False, nullable=False)
     CanUnlockEditAnnexure = Column(Boolean, default=False, nullable=False)
+
+    # ---- LOI / Cycle CR flags ----
+    # ``CanCaptureLOI`` gates adding a Letter of Intent to a cycle.
+    # Typically granted to KRO+ because LOIs are routine sales capture.
+    # ``CanSubmitPO`` remains the gate for the formal PO append AND for
+    # Submit & Mature (whether triggered by LOI or PO).
+    CanCaptureLOI = Column(Boolean, default=False, nullable=False)
+    # ``CanStartNewCycle`` gates opening a new call-off cycle on an
+    # existing quotation. Reused as the close/abandon gate too — it's
+    # a single trust boundary ("can decide when the call-off chain
+    # progresses"). Typically HOD+ only.
+    CanStartNewCycle = Column(Boolean, default=False, nullable=False)

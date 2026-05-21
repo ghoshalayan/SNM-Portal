@@ -42,6 +42,11 @@ const COST_HEAD_LABELS: { [key: string]: string } = {
 
 const ALL_COST_HEADS = ['TPWGST', ...INHERITABLE_FIELDS];
 
+// Cost heads stored as positive values but subtracted from totRate (CR #2 —
+// users enter discount amounts as positive numbers; the math deducts them).
+// Keep in sync with backend ``DEDUCTED_COST_HEADS`` in quotation_service.py.
+export const DEDUCTED_COST_HEADS: ReadonlySet<string> = new Set(['CD', 'SplDisc']);
+
 @Component({
   selector: 'app-quotation-detail-dialog',
   standalone: true,
@@ -188,12 +193,17 @@ const ALL_COST_HEADS = ['TPWGST', ...INHERITABLE_FIELDS];
         @for (key of costHeadKeys; track key) {
           <mat-form-field appearance="outline" class="cost-field"
             [class.locked-field]="isCellLocked(key)"
-            [matTooltip]="lockReason(key)" matTooltipPosition="above">
+            [class.deducted-field]="isDeductedHead(key)"
+            [matTooltip]="isDeductedHead(key)
+              ? 'Enter the discount amount as a positive number — it will be deducted automatically.'
+              : lockReason(key)"
+            matTooltipPosition="above">
             <mat-label>{{ getLabel(key) }}</mat-label>
             <input matInput type="number" [(ngModel)]="row[key]"
               (ngModelChange)="recalculate()"
               [readonly]="isCellLocked(key)" />
             <mat-icon matSuffix *ngIf="isCellLocked(key)" class="lock-icon">lock</mat-icon>
+            <mat-icon matSuffix *ngIf="isDeductedHead(key)" class="ded-icon">remove_circle_outline</mat-icon>
           </mat-form-field>
         }
       </div>
@@ -252,6 +262,26 @@ const ALL_COST_HEADS = ['TPWGST', ...INHERITABLE_FIELDS];
     }
     .cost-field.locked-field ::ng-deep input { color: rgba(0,0,0,0.45); font-style: italic; }
     .lock-icon { font-size: 16px; width: 16px; height: 16px; color: rgba(0,0,0,0.45); }
+    /* CR #2 — CD + Spl. Discount: red wash on the input field and a
+       remove-circle suffix icon so the user knows the value will be
+       deducted automatically. */
+    .cost-field.deducted-field ::ng-deep .mat-mdc-text-field-wrapper {
+      background: rgba(229, 57, 53, 0.10) !important;
+    }
+    .cost-field.deducted-field ::ng-deep .mdc-notched-outline__leading,
+    .cost-field.deducted-field ::ng-deep .mdc-notched-outline__notch,
+    .cost-field.deducted-field ::ng-deep .mdc-notched-outline__trailing {
+      border-color: #c62828 !important;
+    }
+    .cost-field.deducted-field ::ng-deep input {
+      color: #c62828 !important;
+      font-weight: 600;
+    }
+    .cost-field.deducted-field ::ng-deep .mat-mdc-form-field-label,
+    .cost-field.deducted-field ::ng-deep .mdc-floating-label {
+      color: #c62828 !important;
+    }
+    .ded-icon { font-size: 16px; width: 16px; height: 16px; color: #c62828; }
     .totals-row {
       display: flex; gap: 24px; padding: 12px 0; font-size: 14px; flex-wrap: wrap;
     }
@@ -278,6 +308,10 @@ export class QuotationDetailDialogComponent implements OnInit {
   usePreviousLine = false;
   hasPreviousRow = false;
   private backupValues: { [key: string]: number } = {};
+  /** Snapshot of cost-head values when the dialog opens (edit mode only).
+   *  Used by the save() flow to surface the actual diff to the parent so
+   *  it can offer CR #1 bulk-apply. Empty on Add. */
+  private initialCostHeads: { [key: string]: number | null } = {};
 
   // Templates
   templates: any[] = [];
@@ -346,6 +380,15 @@ export class QuotationDetailDialogComponent implements OnInit {
     // Take backup of current inheritable values AFTER zeroing so a "Copy
     // from previous line" + restore round-trip respects the lock state.
     this.snapshotBackup();
+    // CR #1 — snapshot the initial cost-head values on edit so save()
+    // can diff them and surface changed fields to the parent for the
+    // bulk-apply prompt. Skip on Add (everything would be "changed").
+    if (this.isEdit) {
+      for (const key of ALL_COST_HEADS) {
+        const v = this.row[key];
+        this.initialCostHeads[key] = (v == null || v === '') ? null : Number(v);
+      }
+    }
   }
 
   private autoFillDispatch(): void {
@@ -445,6 +488,12 @@ export class QuotationDetailDialogComponent implements OnInit {
   }
 
   getLabel(key: string): string { return COST_HEAD_LABELS[key] || key; }
+
+  /** True for CD + SplDisc — drives the red discount styling and the
+   *  "type positive, math deducts" hint in the dialog. */
+  isDeductedHead(key: string): boolean {
+    return DEDUCTED_COST_HEADS.has(key);
+  }
 
   onItemNameSelect(item: any): void {
     this.row.itemid = item.itemId;
@@ -550,7 +599,10 @@ export class QuotationDetailDialogComponent implements OnInit {
 
   recalculate(): void {
     let sum = 0;
-    for (const key of ALL_COST_HEADS) sum += (Number(this.row[key]) || 0);
+    for (const key of ALL_COST_HEADS) {
+      const v = Number(this.row[key]) || 0;
+      sum += DEDUCTED_COST_HEADS.has(key) ? -v : v;
+    }
     this.row.totRate = sum;
     const gstRate = 0.18;
     if (this.row.gstMode === 'CGST_SGST') {
@@ -649,7 +701,26 @@ export class QuotationDetailDialogComponent implements OnInit {
    *  dropdown next time. Skipped when no Item Name is selected (master
    *  needs the itemId FK) or when the value already exists for that item. */
   private maybePromptSaveLengthToMaster(typed: string | null): void {
-    const close = () => this.dialogRef.close(true);
+    // CR #1 — build the close payload with the changed cost-head diff
+    // so the parent can offer bulk-apply. On Add (no initial snapshot)
+    // changedCostHeads is empty.
+    const changedCostHeads: { key: string; oldValue: number | null; newValue: number | null }[] = [];
+    if (this.isEdit) {
+      for (const key of ALL_COST_HEADS) {
+        const oldV = this.initialCostHeads[key] ?? null;
+        const v = this.row[key];
+        const newV = (v == null || v === '') ? null : Number(v);
+        if ((oldV ?? 0) !== (newV ?? 0)) {
+          changedCostHeads.push({ key, oldValue: oldV, newValue: newV });
+        }
+      }
+    }
+    const close = () => this.dialogRef.close({
+      saved: true,
+      sourceRowId: this.row.quotDtlId ?? null,
+      mode: this.data.mode ?? 'quotation',
+      changedCostHeads,
+    });
     if (!typed) return close();
     const exists = this.lengths.some(
       (l: any) => (l.itemLength || '').trim().toLowerCase() === typed.toLowerCase()

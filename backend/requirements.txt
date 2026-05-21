@@ -25,8 +25,13 @@ aiosmtplib==3.0.2
 # Excel export
 openpyxl==3.1.5
 
-# Testing
+# Testing — Phase 0 foundation. httpx powers FastAPI TestClient; pytest
+# is the runner; pytest-cov tracks coverage; freezegun pins datetime for
+# tests that touch effectedFrom / approvedon logic.
 httpx==0.28.1
+pytest==8.3.4
+pytest-cov==6.0.0
+freezegun==1.5.1
 
 # Caching (in-process TTL, no external dependency)
 cachetools==5.5.0

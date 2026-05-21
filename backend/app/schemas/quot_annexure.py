@@ -15,6 +15,10 @@ class AnnexureResponse(BaseModel):
     annexureId: int
     companyId: int
     quotId: int
+    # Cycle context — needed by the FE so the Re-source picker can
+    # scope its PO/LOI lookup to the correct cycle. Missing this
+    # field made resource() reject with "no cycle context".
+    quotOrderCycleId: Optional[int] = None
     viabilityId: Optional[int] = None
     status: str
 

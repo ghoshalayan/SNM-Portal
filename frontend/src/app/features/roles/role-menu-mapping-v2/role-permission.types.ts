@@ -33,6 +33,12 @@ export interface MenuPermission {
   canUnlockEditPO?: boolean;
   canUnlockEditViability?: boolean;
   canUnlockEditAnnexure?: boolean;
+  /** LOI / Cycle CR — Phase 1A flags. ``canCaptureLOI`` gates appending
+   *  a non-binding LOI to an Active cycle (looser, KRO-and-above);
+   *  ``canStartNewCycle`` gates opening a fresh call-off cycle and
+   *  closing / abandoning one (HOD-and-above). */
+  canCaptureLOI?: boolean;
+  canStartNewCycle?: boolean;
   children?: MenuPermission[];
 }
 
@@ -68,6 +74,7 @@ export const ALL_PERMISSION_FLAGS: (keyof MenuPermission)[] = [
   'canApproveViability',
   'canUnlockEditQuotation', 'canUnlockEditPO',
   'canUnlockEditViability', 'canUnlockEditAnnexure',
+  'canCaptureLOI', 'canStartNewCycle',
 ];
 
 export type FlagKey =
@@ -77,7 +84,8 @@ export type FlagKey =
   | 'canConvert' | 'canReactivate' | 'canSubmitPO' | 'canRejectPO'
   | 'canApproveViability'
   | 'canUnlockEditQuotation' | 'canUnlockEditPO'
-  | 'canUnlockEditViability' | 'canUnlockEditAnnexure';
+  | 'canUnlockEditViability' | 'canUnlockEditAnnexure'
+  | 'canCaptureLOI' | 'canStartNewCycle';
 
 /** Preset templates for quick role baseline. */
 export interface PermissionPreset {

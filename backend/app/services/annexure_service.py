@@ -12,6 +12,7 @@ from typing import List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.timezone import now_ist
 from app.models.company import Company
 from app.models.customer import CustomerContacts, CustomerMaster, CustomerSite
 from app.models.delivery import DeliveryMode
@@ -78,6 +79,8 @@ def generate_annexure(
     *,
     quotation: QuotSummary,
     user_id: int,
+    sourced_from_viability_id: int | None = None,
+    sourced_from_po_id: int | None = None,
 ) -> QuotAnnexure:
     """Idempotent — returns the existing active annexure if one already
     exists for this quotation.
@@ -85,6 +88,19 @@ def generate_annexure(
     Pre-conditions:
       - quotation.status must indicate viability has been approved.
       - An active viability sheet with status='Approved' must exist.
+
+    Slice B (soft-flow source pickers):
+
+    * ``sourced_from_viability_id`` — explicit pick of which
+      QuotViabilitySheet row this annexure references. When omitted,
+      defaults to the latest-active sheet on the quotation.
+    * ``sourced_from_po_id`` — explicit pick of which
+      QuotPurchaseOrder row inside the cycle to source header fields
+      from. When omitted, defaults to ``quotation.purchase_order``
+      (legacy single-PO field).
+
+    Both pickers must reference entities scoped to this quotation;
+    raises ValueError if a passed id belongs elsewhere.
     """
     if quotation.status not in VIABILITY_APPROVED_STATUSES:
         raise ValueError(
@@ -103,14 +119,31 @@ def generate_annexure(
     if existing:
         return existing
 
-    viability = (
-        db.query(QuotViabilitySheet)
-        .filter(
-            QuotViabilitySheet.quotId == quotation.quotId,
-            QuotViabilitySheet.isActive == True,
+    # Resolve the source viability — picker wins; default is latest-active.
+    if sourced_from_viability_id is not None:
+        viability = (
+            db.query(QuotViabilitySheet)
+            .filter(
+                QuotViabilitySheet.viabilityId == sourced_from_viability_id,
+                QuotViabilitySheet.quotId == quotation.quotId,
+                QuotViabilitySheet.isActive == True,
+            )
+            .first()
         )
-        .first()
-    )
+        if viability is None:
+            raise ValueError(
+                f"Viability sheet {sourced_from_viability_id} not found "
+                f"on this quotation."
+            )
+    else:
+        viability = (
+            db.query(QuotViabilitySheet)
+            .filter(
+                QuotViabilitySheet.quotId == quotation.quotId,
+                QuotViabilitySheet.isActive == True,
+            )
+            .first()
+        )
     if not viability or viability.status != "Approved":
         raise ValueError("An approved viability sheet is required before generating the annexure.")
 
@@ -120,7 +153,27 @@ def generate_annexure(
     # is what lets the annexure ship to a project site or bill a group
     # company even when the original quotation was prepped against the
     # customer's HO.
-    po = quotation.purchase_order
+    #
+    # Slice B picker: ``sourced_from_po_id`` selects a specific PO row
+    # within this cycle; without it the legacy ``quotation.purchase_order``
+    # (1:1 helper) is used.
+    if sourced_from_po_id is not None:
+        from app.models.quot_purchase_order import QuotPurchaseOrder
+        po = (
+            db.query(QuotPurchaseOrder)
+            .filter(
+                QuotPurchaseOrder.quotPOId == sourced_from_po_id,
+                QuotPurchaseOrder.quotId == quotation.quotId,
+                QuotPurchaseOrder.isActive == True,  # noqa: E712
+            )
+            .first()
+        )
+        if po is None:
+            raise ValueError(
+                f"Purchase order {sourced_from_po_id} not found on this quotation."
+            )
+    else:
+        po = quotation.purchase_order
     customer = (
         db.query(CustomerMaster).filter(CustomerMaster.customerId == po.customerId).first()
         if po else None
@@ -257,9 +310,21 @@ def generate_annexure(
         else (consignee_site.siteAddressCode if consignee_site else None)
     ) or consignee_address_text
 
+    # Phase 1A — ``quotOrderCycleId`` is NOT NULL on QuotAnnexure too.
+    # The annexure shares the viability's cycle (one annexure per
+    # cycle, CR decision C2). Fall back to the PO's cycle, and as a
+    # last resort the quotation's active cycle resolver.
+    from app.services.cycle_service import resolve_active_cycle_id
+    cycle_id = (
+        viability.quotOrderCycleId if viability.quotOrderCycleId
+        else (po.quotOrderCycleId if po and po.quotOrderCycleId
+              else resolve_active_cycle_id(db, quotation.quotId))
+    )
+
     annexure = QuotAnnexure(
         companyId=quotation.companyId,
         quotId=quotation.quotId,
+        quotOrderCycleId=cycle_id,
         viabilityId=viability.viabilityId,
         status="Draft",
         # Phase 3 freshness pointers — record the upstream versions
@@ -420,6 +485,294 @@ def re_source_annexure_from_upstream(
     return new_annexure
 
 
+def refill_annexure_from_viability(
+    db: Session,
+    *,
+    annexure: QuotAnnexure,
+    viability: QuotViabilitySheet,
+    user_id: int,
+) -> QuotAnnexure:
+    """Recompute the diawise breakup + viability-driven totals on an
+    existing annexure from a chosen viability version.
+
+    Issue #4 user flow: the customer wants to compare annexure shapes
+    against different viability iterations (v1 said ₹X, v2 said ₹Y).
+    Picking a viability version in the annexure UI and refilling lets
+    them do that without rebuilding the annexure from scratch.
+
+    Fields refreshed: diawiseBreakup, totalBillableAmount,
+    totalQuantityMT, transportChargesPerMT, sourcedFromViabilityVersion,
+    viabilityId (pinned to the exact picked version, not just the
+    head). Header fields (client, addresses, payment terms, signatures)
+    are NOT touched — they trace to the PO + quotation, not the
+    viability.
+
+    Raises ``ValueError`` when:
+      * The annexure is already approved (use Unlock & Edit first).
+      * The picked viability doesn't belong to the same quotation.
+    """
+    if annexure.status == "Approved":
+        raise ValueError(
+            "Refill is not allowed on an approved annexure. "
+            "Unlock & Edit first."
+        )
+    if viability.quotId != annexure.quotId:
+        raise ValueError(
+            "Viability version does not belong to the same quotation."
+        )
+
+    active_lines = (
+        db.query(QuotViabilityLine)
+        .filter(
+            QuotViabilityLine.viabilityId == viability.viabilityId,
+            QuotViabilityLine.isActive == True,  # noqa: E712
+        )
+        .order_by(QuotViabilityLine.viabilityLineId.asc())
+        .all()
+    )
+
+    total_qty = sum(_d(l.orderedQty) for l in active_lines)
+    total_amount = sum(_d(l.grossExForPrice) for l in active_lines)
+
+    # Transport-charges-per-MT: prefer the freight head matching the
+    # annexure's existing transport mode (if any); else weighted avg
+    # of whichever freight head is populated per line.
+    mode = (annexure.transportMode or "").strip().lower()
+    freight_total = Decimal("0")
+    freight_qty = Decimal("0")
+    for l in active_lines:
+        qty = _d(l.orderedQty)
+        if qty <= 0:
+            continue
+        freight = None
+        if "trailer" in mode:
+            freight = l.FreightTrailer
+        elif "truck" in mode:
+            freight = l.FreightTruck
+        else:
+            freight = (
+                l.FreightTrailer if l.FreightTrailer is not None
+                else l.FreightTruck
+            )
+        if freight is not None:
+            freight_total += _d(freight) * qty
+            freight_qty += qty
+    transport_charges_per_mt = (
+        freight_total / freight_qty if freight_qty > 0 else None
+    )
+
+    annexure.viabilityId = viability.viabilityId
+    annexure.sourcedFromViabilityVersion = viability.versionNo
+    annexure.totalQuantityMT = total_qty
+    annexure.totalBillableAmount = total_amount
+    annexure.transportChargesPerMT = transport_charges_per_mt
+    annexure.diawiseBreakup = json.dumps(compute_diawise_breakup(active_lines))
+    annexure.lastupdateby = user_id
+    annexure.lastupdateon = now_ist()
+    db.flush()
+    db.refresh(annexure)
+    return annexure
+
+
+def resource_annexure(
+    db: Session,
+    *,
+    annexure: QuotAnnexure,
+    viability: QuotViabilitySheet,
+    po,  # QuotPurchaseOrder; imported lazily by caller to avoid cycle
+    user_id: int,
+    viability_snapshot=None,  # QuotViabilityApprovalSnapshot | None
+) -> QuotAnnexure:
+    """Refresh the **auto-populated** header + diawise on an existing
+    annexure when the user picks new source(s) — a different
+    Viability version, a different PO/LOI, or both.
+
+    Strictly limited to fields the system originally derived from the
+    Viability sheet and the PO row. User-edited body fields (payment
+    terms, delivery schedule, remarks, signatures, manual addressee,
+    static defaults like invoicing/tolerance/qualityStandard, totals
+    the user may have rounded, etc.) are left alone — Re-source is a
+    "refresh the headers I derived from sources" action, not a clean
+    regenerate.
+
+    Fields refreshed:
+
+      From the picked **viability**:
+        * ``viabilityId`` (the FK pin)
+        * ``sourcedFromViabilityVersion`` (audit pointer)
+        * ``totalQuantityMT``, ``totalBillableAmount``
+        * ``transportChargesPerMT``, ``transportRealizationPerMT``
+        * ``specificLength``, ``qualityFe``, ``qualityStandardLength``
+          (majority across viability lines)
+        * ``diawiseBreakup`` (recomputed from lines)
+
+      From the picked **PO**:
+        * ``sourcedFromPOVersion`` (audit pointer)
+        * ``clientName``, ``customerPONo``, ``customerPODate``
+        * ``panNo``, ``gstNo`` (from PO's customer)
+        * ``contactPerson``, ``contactPersonNumber``
+        * ``billingAddress``, ``consigneeAddress``, ``transportChargesFOR``
+
+    Raises ``ValueError`` for cross-quotation picks or when the
+    annexure has been approved (use Unlock & Edit first if you really
+    want to re-source an approved row — same gate as the existing
+    refill helper).
+    """
+    # Soft-flow: allow Re-generate on approved annexures too. The
+    # change is recorded as a post-approval edit; the next Approve
+    # creates the next snapshot version. The previously approved
+    # snapshot stays frozen in the snapshot table for audit.
+    if viability.quotId != annexure.quotId:
+        raise ValueError(
+            "Viability version does not belong to the same quotation."
+        )
+    if po is None:
+        raise ValueError("Pick a PO/LOI to re-generate from.")
+    if po.quotId != annexure.quotId:
+        raise ValueError(
+            "PO/LOI does not belong to the same quotation."
+        )
+
+    # Source the line collection:
+    #   * Snapshot path (Phase B follow-up): user picked a past
+    #     viability VERSION → read the frozen lines from the snapshot
+    #     blob. Works even when the original sheet has been archived
+    #     (e.g. after a Re-generate further forward in time).
+    #   * Default path: read live lines off the picked sheet head.
+    active_lines: List = []
+    snapshot_version_no: Optional[int] = None
+    if viability_snapshot is not None:
+        snapshot_version_no = viability_snapshot.versionNo
+        payload = json.loads(viability_snapshot.snapshotData)
+        from types import SimpleNamespace
+        # Snapshot blob ships strings for Decimals/dates (see
+        # _json_default). Coerce per-column so downstream math runs on
+        # native Decimals rather than strings.
+        from app.services.approval_snapshot_service import _coerce_snapshot_value
+        line_columns = {
+            c.key: c for c in QuotViabilityLine.__table__.columns
+        }
+        for row_data in payload.get("lines", []) or []:
+            coerced = {}
+            for k, v in row_data.items():
+                col = line_columns.get(k)
+                coerced[k] = (
+                    _coerce_snapshot_value(col, v) if col is not None else v
+                )
+            # Skip rows that were inactive at snapshot time
+            if coerced.get("isActive") is False:
+                continue
+            active_lines.append(SimpleNamespace(**coerced))
+    else:
+        active_lines = (
+            db.query(QuotViabilityLine)
+            .filter(
+                QuotViabilityLine.viabilityId == viability.viabilityId,
+                QuotViabilityLine.isActive == True,  # noqa: E712
+            )
+            .order_by(QuotViabilityLine.viabilityLineId.asc())
+            .all()
+        )
+
+    # ----- Viability-derived -----
+    total_qty = sum(_d(l.orderedQty) for l in active_lines)
+    total_amount = sum(_d(l.grossExForPrice) for l in active_lines)
+
+    mode = (annexure.transportationMode or "").strip().lower()
+    freight_total = Decimal("0")
+    freight_qty = Decimal("0")
+    for l in active_lines:
+        qty = _d(l.orderedQty)
+        if qty <= 0:
+            continue
+        freight = None
+        if "trailer" in mode:
+            freight = l.FreightTrailer
+        elif "truck" in mode:
+            freight = l.FreightTruck
+        else:
+            freight = (
+                l.FreightTrailer if l.FreightTrailer is not None
+                else l.FreightTruck
+            )
+        if freight is not None:
+            freight_total += _d(freight) * qty
+            freight_qty += qty
+    transport_charges_per_mt = (
+        freight_total / freight_qty if freight_qty > 0 else None
+    )
+
+    annexure.viabilityId = viability.viabilityId
+    # When sourcing from a snapshot, stamp the audit pointer with the
+    # snapshot's versionNo (which is the C{n}-V{m} number the user
+    # picked) rather than the sheet head's versionNo (which is the
+    # internal head counter and means little to the user).
+    annexure.sourcedFromViabilityVersion = (
+        snapshot_version_no
+        if snapshot_version_no is not None
+        else viability.versionNo
+    )
+    annexure.totalQuantityMT = total_qty
+    annexure.totalBillableAmount = total_amount
+    annexure.transportChargesPerMT = transport_charges_per_mt
+    annexure.transportRealizationPerMT = transport_charges_per_mt
+    annexure.specificLength = _majority([l.itemLength for l in active_lines])
+    annexure.qualityFe = _majority([l.itemGradeName for l in active_lines])
+    annexure.qualityStandardLength = _majority([l.itemLength for l in active_lines])
+    annexure.diawiseBreakup = json.dumps(compute_diawise_breakup(active_lines))
+
+    # ----- PO-derived -----
+    customer = (
+        db.query(CustomerMaster)
+        .filter(CustomerMaster.customerId == po.customerId)
+        .first()
+    )
+    contact = (
+        db.query(CustomerContacts)
+        .filter(CustomerContacts.customerContactId == po.customerContactId)
+        .first() if po.customerContactId else None
+    )
+    billing_site = (
+        db.query(CustomerSite)
+        .filter(CustomerSite.siteId == po.billingSiteId)
+        .first() if po.billingSiteId else None
+    )
+    consignee_site = (
+        db.query(CustomerSite)
+        .filter(CustomerSite.siteId == po.consigneeSiteId)
+        .first() if po.consigneeSiteId else None
+    )
+    billing_address_text = (
+        billing_site.addressLine if billing_site
+        else po.billingAddressManual
+    )
+    consignee_address_text = (
+        consignee_site.addressLine if consignee_site
+        else po.consigneeAddressManual
+    )
+    transport_for_text = consignee_address_text
+
+    annexure.sourcedFromPOVersion = po.versionNo
+    annexure.clientName = customer.customerName if customer else None
+    annexure.customerPONo = po.poNo
+    annexure.customerPODate = po.poDate
+    annexure.panNo = customer.PAN if customer else None
+    annexure.gstNo = customer.GSTN if customer else None
+    annexure.contactPerson = contact.contactPersonName if contact else None
+    annexure.contactPersonNumber = (
+        (contact.officePhone or contact.personalPhone) if contact else None
+    )
+    annexure.billingAddress = billing_address_text
+    annexure.consigneeAddress = consignee_address_text
+    annexure.transportChargesFOR = transport_for_text
+
+    annexure.lastupdateby = user_id
+    annexure.lastupdateon = now_ist()
+    db.flush()
+    db.refresh(annexure)
+    return annexure
+
+
 def list_annexure_versions(
     db: Session, quotation: QuotSummary,
 ) -> List[QuotAnnexure]:
@@ -491,6 +844,10 @@ def restore_annexure_version(
     new_row = QuotAnnexure(
         companyId=quotation.companyId,
         quotId=quotation.quotId,
+        # New versions stay attached to the same cycle as the row
+        # they're forked from — cycle scope is a property of the
+        # annexure chain, not of any individual version.
+        quotOrderCycleId=target.quotOrderCycleId,
         parentAnnexureId=chain_root.annexureId if chain_root else None,
         versionNo=max_version + 1,
         status="Draft",

@@ -98,6 +98,11 @@ def clone_from_quotation(
         row = QuotPOWorkingSheet(
             companyId=po.companyId,
             quotPOId=po.quotPOId,
+            # Phase 1A made ``quotOrderCycleId`` NOT NULL on this table.
+            # Copy from the owning PO so the cycle-aware /convert path
+            # (which always sets the cycle FK on the PO) keeps the
+            # constraint satisfied without an extra arg.
+            quotOrderCycleId=po.quotOrderCycleId,
             sourceQuotDtlId=src.quotDtlId,
             createdby=user_id,
             **{col: getattr(src, col, None) for col in _CLONE_COLUMNS},
@@ -212,3 +217,96 @@ def get_line_by_id(
         )
         .first()
     )
+
+
+# ----------------------------------------------------------------------
+# LOI / Cycle CR — cycle-scoped helpers (Phase 1B)
+# ----------------------------------------------------------------------
+
+def list_working_sheet_for_cycle(
+    db: Session, cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+) -> List[QuotPOWorkingSheet]:
+    """Return every active FWS line under a cycle, ordered by id for
+    deterministic rendering. One Working Sheet per cycle (per CR
+    decision C2)."""
+    return (
+        db.query(QuotPOWorkingSheet)
+        .filter(
+            QuotPOWorkingSheet.quotOrderCycleId == cycle.quotOrderCycleId,
+            QuotPOWorkingSheet.isActive == True,  # noqa: E712
+        )
+        .order_by(QuotPOWorkingSheet.poWorkingSheetId.asc())
+        .all()
+    )
+
+
+def clone_working_sheet_for_new_cycle(
+    db: Session,
+    new_cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    parent_cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    *,
+    owning_po: QuotPurchaseOrder,
+    user_id: int,
+) -> List[QuotPOWorkingSheet]:
+    """Seed the new cycle's Working Sheet from the parent cycle's
+    inheritance source (approved viability → working sheet fallback).
+    Returns the freshly inserted rows.
+
+    Per CR decision C4: rates flow from the parent's last approved
+    viability when present, else from its raw working sheet. The
+    ``cycle_service.get_inheritance_source`` helper picks the right
+    source and hands back the per-line rows; we copy cost-head
+    columns 1:1 into the new cycle's WS.
+
+    ``owning_po`` is the PO or LOI the cloned rows attribute to —
+    required because ``QuotPOWorkingSheet.quotPOId`` is NOT NULL.
+    Callers typically pass the first LOI/PO appended to the new
+    cycle. Subsequent LOIs/POs share the same WS rows (one Working
+    Sheet per cycle per CR decision C2).
+
+    The clone is a ONE-TIME copy at cycle-start. Subsequent edits to
+    the parent don't propagate — that's the snapshot semantics the
+    storybook locked.
+
+    Truly-new items added to the new cycle later (LOI brings in a
+    dia not in the parent) take a fresh ``RawMaterialCost`` lookup at
+    the cycle's start date. That happens in the caller, not here.
+    """
+    # Deferred import to keep this module free of an import-time
+    # dependency on cycle_service (which itself imports FWS rows).
+    from app.services.cycle_service import get_inheritance_source
+
+    if owning_po.quotOrderCycleId != new_cycle.quotOrderCycleId:
+        raise ValueError(
+            "owning_po must belong to new_cycle; got "
+            f"po.cycle={owning_po.quotOrderCycleId} vs "
+            f"new_cycle={new_cycle.quotOrderCycleId}.",
+        )
+
+    src = get_inheritance_source(db, parent_cycle)
+    if src.source_type == "none":
+        return []
+
+    new_rows: List[QuotPOWorkingSheet] = []
+    for src_line in src.lines:
+        # Pull cost-head columns directly off the source — works
+        # whether the source is QuotViabilityLine or
+        # QuotPOWorkingSheet because both mirror QuotDetails.
+        payload = {
+            col: getattr(src_line, col, None)
+            for col in _CLONE_COLUMNS
+        }
+        row = QuotPOWorkingSheet(
+            companyId=new_cycle.companyId,
+            quotPOId=owning_po.quotPOId,
+            quotOrderCycleId=new_cycle.quotOrderCycleId,
+            sourceQuotDtlId=getattr(src_line, "sourceQuotDtlId", None),
+            createdby=user_id,
+            **payload,
+        )
+        db.add(row)
+        new_rows.append(row)
+    db.flush()
+    for row in new_rows:
+        db.refresh(row)
+    return new_rows

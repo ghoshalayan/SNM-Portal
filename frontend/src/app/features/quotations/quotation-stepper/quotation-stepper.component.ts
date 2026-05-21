@@ -44,8 +44,14 @@ interface Stop {
   reached: boolean;
   /** true → user is currently viewing this stage. */
   active: boolean;
-  /** Sub-text under the label, e.g. "approved" / "draft" / "PO received". */
+  /** Primary sub-text under the label, e.g. "approved" / "draft" /
+   *  "1 formal · 1 LOI". Kept short — wraps onto a second line when
+   *  the rich rollup is in play. */
   sub?: string;
+  /** Optional second-line sub-text. Used by the rich rollup so a stage
+   *  can show both a status word and a version label, e.g.
+   *  ``Approved`` + ``C1-V2``. */
+  subDetail?: string;
   /** Mark the stop with the warning tone (e.g. Rejected). */
   error?: boolean;
   /** Mark the stop as locked-out (no entity exists yet). Still
@@ -73,6 +79,7 @@ interface Stop {
           </div>
           <div class="label">{{ s.label }}</div>
           @if (s.sub) { <div class="sub">{{ s.sub }}</div> }
+          @if (s.subDetail) { <div class="sub-detail">{{ s.subDetail }}</div> }
         </button>
         @if (!last) {
           <div class="line" [class.reached]="connectorReached($index)"></div>
@@ -135,9 +142,22 @@ interface Stop {
     .sub {
       font-size: 10px;
       color: var(--snm-text-faint);
-      line-height: 1.1;
+      line-height: 1.2;
       text-transform: uppercase;
       letter-spacing: 0.3px;
+      max-width: 180px;
+      text-align: center;
+      white-space: normal;
+    }
+    .sub-detail {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--snm-text-secondary);
+      line-height: 1.2;
+      letter-spacing: 0.2px;
+      max-width: 180px;
+      text-align: center;
+      white-space: normal;
     }
 
     .stop.reached .dot {
@@ -182,6 +202,7 @@ interface Stop {
       .stepper { padding: 12px 8px; }
       .label { font-size: 11px; }
       .sub { display: none; }
+      .sub-detail { display: none; }
       .dot { width: 32px; height: 32px; }
       .dot mat-icon { font-size: 18px; width: 18px; height: 18px; }
     }
@@ -250,6 +271,7 @@ interface Stop {
       }
       .stepper.vertical .label { font-size: 11px; }
       .stepper.vertical .sub { display: none; }
+      .stepper.vertical .sub-detail { display: none; }
     }
   `],
 })
@@ -278,6 +300,37 @@ export class QuotationStepperComponent {
    *  stops stacked top-to-bottom in a sticky left column. */
   @Input() orientation: 'horizontal' | 'vertical' = 'horizontal';
 
+  // ---- Rich cycle rollup (merged from former cycle-status-panel) ----
+  /** Current cycle number — drives the ``C{n}-V{m}`` labels in the
+   *  per-stage sub-text. ``null`` falls back to the legacy status-only
+   *  sub-text. */
+  @Input() set cycleNo(v: number | null | undefined) { this._cycleNo.set(v ?? null); }
+  get cycleNo(): number | null { return this._cycleNo(); }
+
+  @Input() set formalPoCount(v: number) { this._formalPoCount.set(v || 0); }
+  get formalPoCount(): number { return this._formalPoCount(); }
+
+  @Input() set loiCount(v: number) { this._loiCount.set(v || 0); }
+  get loiCount(): number { return this._loiCount(); }
+
+  @Input() set fwsLatestLabel(v: string | null | undefined) {
+    this._fwsLatestLabel.set(v ?? null);
+  }
+  get fwsLatestLabel(): string | null { return this._fwsLatestLabel(); }
+
+  @Input() set fwsVersionCount(v: number) { this._fwsVersionCount.set(v || 0); }
+  get fwsVersionCount(): number { return this._fwsVersionCount(); }
+
+  @Input() set viabilityVersionNo(v: number | null | undefined) {
+    this._viabVersion.set(v ?? null);
+  }
+  get viabilityVersionNo(): number | null { return this._viabVersion(); }
+
+  @Input() set annexureVersionNo(v: number | null | undefined) {
+    this._annVersion.set(v ?? null);
+  }
+  get annexureVersionNo(): number | null { return this._annVersion(); }
+
   /** Emitted when the user clicks a station. Parent updates
    *  ``currentStage`` and re-renders the workspace's stage panel. */
   @Output() stageSelected = new EventEmitter<StageKey>();
@@ -287,6 +340,13 @@ export class QuotationStepperComponent {
   private _viab = signal<ViabilityStatus>(null);
   private _ann = signal<AnnexureStatus>(null);
   private _current = signal<StageKey>('quotation');
+  private _cycleNo = signal<number | null>(null);
+  private _formalPoCount = signal<number>(0);
+  private _loiCount = signal<number>(0);
+  private _fwsLatestLabel = signal<string | null>(null);
+  private _fwsVersionCount = signal<number>(0);
+  private _viabVersion = signal<number | null>(null);
+  private _annVersion = signal<number | null>(null);
 
   stops = computed<Stop[]>(() => {
     const s = this._status();
@@ -307,10 +367,56 @@ export class QuotationStepperComponent {
     const annReached = a != null;
 
     const current = this._current();
-    const poDone = po === 'Submitted';
     const viabApproved = v === 'Approved';
     const annApproved = a === 'Approved';
     const poRejected = po === 'Rejected';
+
+    // Rich rollup context (formerly the cycle-status-panel). When
+    // ``cycleNo`` is null, fall back to the legacy status-only labels.
+    const cycleNo = this._cycleNo();
+    const formal = this._formalPoCount();
+    const loi = this._loiCount();
+    const fwsLabel = this._fwsLatestLabel();
+    const fwsVersions = this._fwsVersionCount();
+    const viabVersion = this._viabVersion();
+    const annVersion = this._annVersion();
+
+    // PO/LOI sub-line: "1 formal · 1 LOI" or just the count side that
+    // exists; folds the FWS label in as a second line so the user
+    // sees both PO and FWS state in one stop.
+    let poSub: string | undefined;
+    let poDetail: string | undefined;
+    if (poReached && cycleNo != null) {
+      const parts: string[] = [];
+      if (formal) parts.push(`${formal} formal`);
+      if (loi) parts.push(`${loi} LOI`);
+      poSub = parts.length ? parts.join(' · ') : (po ? po.toLowerCase() : 'no PO yet');
+      poDetail = fwsLabel
+        ? (fwsVersions > 1 ? `FWS ${fwsLabel} · ${fwsVersions} versions` : `FWS ${fwsLabel}`)
+        : 'FWS not approved';
+    } else if (poReached) {
+      poSub = po ? po.toLowerCase() : 'awaiting submit';
+    }
+
+    // Viability sub-line: status word on line 1, C{n}-V{m} on line 2.
+    let viabSub: string | undefined;
+    let viabDetail: string | undefined;
+    if (viabReached) {
+      viabSub = viabApproved ? 'approved' : 'draft';
+      if (cycleNo != null && viabVersion != null) {
+        viabDetail = `C${cycleNo}-V${viabVersion}`;
+      }
+    }
+
+    // Annexure sub-line: same pattern as viability.
+    let annSub: string | undefined;
+    let annDetail: string | undefined;
+    if (annReached) {
+      annSub = annApproved ? 'approved' : 'draft';
+      if (cycleNo != null && annVersion != null) {
+        annDetail = `C${cycleNo}-V${annVersion}`;
+      }
+    }
 
     return [
       {
@@ -325,16 +431,13 @@ export class QuotationStepperComponent {
       {
         key: 'po',
         label: 'Purchase Order',
-        icon: poRejected ? 'cancel' : (poDone ? 'verified' : 'receipt_long'),
+        icon: poRejected ? 'cancel' : (fwsLabel ? 'verified' : 'receipt_long'),
         reached: poReached,
         active: current === 'po',
         error: poRejected,
         future: !poReached,
-        sub: poReached
-          ? (po
-              ? po.toLowerCase()
-              : 'awaiting submit')
-          : undefined,
+        sub: poSub,
+        subDetail: poDetail,
       },
       {
         key: 'viability',
@@ -343,9 +446,8 @@ export class QuotationStepperComponent {
         reached: viabReached,
         active: current === 'viability',
         future: !viabReached,
-        sub: viabReached
-          ? (viabApproved ? 'approved' : 'draft')
-          : undefined,
+        sub: viabSub,
+        subDetail: viabDetail,
       },
       {
         key: 'annexure',
@@ -354,9 +456,8 @@ export class QuotationStepperComponent {
         reached: annReached,
         active: current === 'annexure',
         future: !annReached,
-        sub: annReached
-          ? (annApproved ? 'approved' : 'draft')
-          : undefined,
+        sub: annSub,
+        subDetail: annDetail,
       },
     ];
   });

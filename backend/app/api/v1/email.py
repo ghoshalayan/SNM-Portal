@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 
+from app.core.background import submit_email
 from app.core.dependencies import get_db, get_current_user, CurrentUser
 from app.models.customer import CustomerContacts
 from app.services.access_service import AccessContext, get_access_context
@@ -26,6 +27,7 @@ class SmtpTestRequest(BaseModel):
 @router.post("/send-quotation")
 def send_quotation_email(
     data: SendQuotationEmailRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
     ctx: AccessContext = Depends(get_access_context),
@@ -72,16 +74,19 @@ def send_quotation_email(
     <p>Best Regards</p>
     """
 
-    try:
-        email_service.send_email(
-            smtp_config=smtp_config,
-            to_email=to_email,
-            subject=subject,
-            html_body=body,
-        )
-        return {"message": f"Email sent to {to_email}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+    # Phase 0 — fire-and-forget via FastAPI BackgroundTasks. The SMTP
+    # handshake + send used to block the request thread for seconds;
+    # now we validate everything synchronously, then queue the actual
+    # send to run after the response is flushed. Failures land in the
+    # structured log (see app.core.background.run_in_background).
+    submit_email(
+        background_tasks,
+        smtp_config=smtp_config,
+        to_email=to_email,
+        subject=subject,
+        html_body=body,
+    )
+    return {"message": f"Email queued for delivery to {to_email}"}
 
 
 @router.post("/test-smtp")

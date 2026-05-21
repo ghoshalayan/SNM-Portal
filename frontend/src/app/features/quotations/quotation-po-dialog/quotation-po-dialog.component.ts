@@ -15,6 +15,8 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatDividerModule } from '@angular/material/divider';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
+
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ServerSearchSelectComponent } from '../../../shared/components/server-search-select/server-search-select.component';
@@ -22,6 +24,7 @@ import {
   ManualAddressDialogComponent,
   ManualAddressDialogResult,
 } from './manual-address-dialog.component';
+import { CycleService } from '../services/cycle.service';
 
 export interface QuotationPoDialogData {
   quotationId: number;
@@ -34,8 +37,19 @@ export interface QuotationPoDialogData {
    *     ``Matured`` (calls ``PUT /quotations/{id}/purchase-order``).
    *     The server returns 409 if the quotation has moved past
    *     Matured — we surface that as an error toast.
+   *   - 'append-cycle' = LOI / Multi-PO CR Phase 1D. Appends a fresh
+   *     PO or LOI row to an Active cycle via
+   *     ``POST /quotations/{qid}/cycles/{cId}/purchase-orders``.
+   *     Adds an "Is LOI?" toggle to the dialog body. Requires
+   *     ``cycleId`` on the data object.
    */
-  mode: 'capture' | 'edit';
+  mode: 'capture' | 'edit' | 'append-cycle';
+  /** Active cycle id — required when ``mode === 'append-cycle'``. */
+  cycleId?: number;
+  /** Display label for the active cycle in the dialog header. */
+  cycleNo?: number;
+  /** Initial value for the isLOI toggle in append-cycle mode. */
+  isLOI?: boolean;
   /** Defaults from the quotation header when capturing for the first
    *  time, OR the existing PO row when editing. */
   defaults: {
@@ -69,25 +83,43 @@ interface SiteOpt {
     MatDialogModule, MatFormFieldModule, MatInputModule, MatSelectModule,
     MatButtonModule, MatIconModule, MatDatepickerModule, MatNativeDateModule,
     MatProgressSpinnerModule, MatDividerModule, MatTooltipModule,
+    MatSlideToggleModule,
     ServerSearchSelectComponent,
   ],
   template: `
     <h2 mat-dialog-title>
       <mat-icon>receipt_long</mat-icon>
-      {{ data.mode === 'capture' ? 'Capture Purchase Order' : 'Edit Purchase Order' }}
+      {{ titleText() }}
       <span class="quot-no" *ngIf="data.quotNo">— {{ data.quotNo }}</span>
+      <span class="cycle-chip"
+            *ngIf="data.mode === 'append-cycle' && data.cycleNo != null">
+        Cycle {{ data.cycleNo }}
+      </span>
     </h2>
+
+    <!-- LOI toggle. Visible in append-cycle AND capture modes — the
+         first call-off on a quotation can be captured as either an
+         LOI or a formal PO. Server-side permission gate picks
+         CanCaptureLOI vs CanConvert/CanSubmitPO based on this flag. -->
+    <div class="loi-toggle-row" *ngIf="showLoiToggle()">
+      <mat-slide-toggle [(ngModel)]="isLOI" [ngModelOptions]="{standalone: true}"
+                        (ngModelChange)="onIsLoiChange()">
+        Capture as Letter of Intent (LOI) — non-binding, no formal PO yet
+      </mat-slide-toggle>
+    </div>
 
     <mat-dialog-content>
       <form [formGroup]="form" class="po-form">
-        <!-- PO header row -->
-        <div class="row two">
-          <mat-form-field appearance="outline">
+        <!-- PO header row. PO No is hidden when capturing as LOI
+             (server auto-generates LOI-{quotId}-{seq}). The date
+             label switches between "PO Date" and "LOI Date" too. -->
+        <div class="row two" [class.row-one-when-loi]="isLOI">
+          <mat-form-field appearance="outline" *ngIf="!isLOI">
             <mat-label>PO No *</mat-label>
             <input matInput formControlName="poNo" maxlength="50" />
           </mat-form-field>
           <mat-form-field appearance="outline">
-            <mat-label>PO Date *</mat-label>
+            <mat-label>{{ isLOI ? 'LOI Date *' : 'PO Date *' }}</mat-label>
             <input matInput [matDatepicker]="poPicker" formControlName="poDate" />
             <mat-datepicker-toggle matSuffix [for]="poPicker"></mat-datepicker-toggle>
             <mat-datepicker #poPicker></mat-datepicker>
@@ -213,6 +245,13 @@ interface SiteOpt {
           </div>
         </div>
 
+        <mat-form-field appearance="outline" class="full" *ngIf="isLOI">
+          <mat-label>LOI Text (optional)</mat-label>
+          <textarea matInput rows="3" formControlName="loiText" maxlength="2000"
+                    placeholder="The intent / scope language from the customer's letter — quantities, timeline, sign-off conditions, etc."></textarea>
+          <mat-hint align="end">{{ loiTextLength }}/2000</mat-hint>
+        </mat-form-field>
+
         <mat-form-field appearance="outline" class="full">
           <mat-label>Remarks (optional)</mat-label>
           <textarea matInput rows="2" formControlName="remarks" maxlength="500"></textarea>
@@ -226,7 +265,7 @@ interface SiteOpt {
         (click)="save()"
         [disabled]="!canSubmit() || saving">
         <mat-spinner *ngIf="saving" diameter="16" class="inline-spinner"></mat-spinner>
-        {{ data.mode === 'capture' ? 'Save & Mature' : 'Save Changes' }}
+        {{ saveButtonText() }}
       </button>
     </mat-dialog-actions>
   `,
@@ -234,10 +273,27 @@ interface SiteOpt {
     :host mat-dialog-content { min-width: 720px; max-width: 820px; }
     h2[mat-dialog-title] { display: flex; align-items: center; gap: 8px; }
     .quot-no { color: rgba(0,0,0,.55); font-weight: 400; }
+    .cycle-chip {
+      margin-left: auto;
+      padding: 2px 10px;
+      border-radius: 12px;
+      background: var(--snm-accent-shadow, rgba(25,118,210,.12));
+      color: var(--snm-accent, #1976d2);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .loi-toggle-row {
+      padding: 8px 24px 0;
+      display: flex;
+      align-items: center;
+    }
     .po-form { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
     .row { display: grid; gap: 12px; }
     .row.one { grid-template-columns: 1fr; }
     .row.two { grid-template-columns: 1fr 1fr; }
+    /* When LOI hides PO No, the trailing date field expands to full
+       width instead of leaving an awkward empty half-row. */
+    .row.two.row-one-when-loi { grid-template-columns: 1fr; }
     .row mat-form-field, .row .addr-block { width: 100%; }
     .full { width: 100%; }
     mat-divider { margin: 4px 0; }
@@ -288,6 +344,8 @@ export class QuotationPoDialogComponent implements OnInit {
   contactSearch = '';
   billingSearch = '';
   consigneeSearch = '';
+  /** isLOI toggle state — only meaningful in append-cycle mode. */
+  isLOI = false;
 
   constructor(
     private fb: FormBuilder,
@@ -295,10 +353,15 @@ export class QuotationPoDialogComponent implements OnInit {
     private notify: NotificationService,
     private dialog: MatDialog,
     private dialogRef: MatDialogRef<QuotationPoDialogComponent, boolean>,
+    private cycles: CycleService,
     @Inject(MAT_DIALOG_DATA) public data: QuotationPoDialogData,
   ) {
+    this.isLOI = !!data.isLOI;
     const d = data.defaults;
     this.form = this.fb.group({
+      // poNo validator is conditionally cleared in ngOnInit (and on
+      // isLOI toggle) — LOIs get a server-generated identifier so
+      // the user shouldn't be forced to type one.
       poNo: [d.poNo || '', [Validators.required, Validators.maxLength(50)]],
       poDate: [d.poDate ? new Date(d.poDate) : null, Validators.required],
       customerId: [d.customerId, Validators.required],
@@ -310,8 +373,13 @@ export class QuotationPoDialogComponent implements OnInit {
       consigneeSiteId: [d.consigneeSiteId ?? d.siteId ?? null],
       consigneeAddressManual: [d.consigneeAddressManual ?? null],
       remarks: [d.remarks ?? ''],
+      // LOI-specific free-text. Only meaningful when isLOI=true; the
+      // template hides this field otherwise.
+      loiText: ['', [Validators.maxLength(2000)]],
     });
     this.selectedCustomerName = d.customerName || '';
+    // Keep poNo's validator in sync with the isLOI toggle on init.
+    this.applyIsLoiState();
   }
 
   ngOnInit(): void {
@@ -495,8 +563,7 @@ export class QuotationPoDialogComponent implements OnInit {
   save(): void {
     if (!this.canSubmit()) return;
     const v = this.form.value;
-    const body = {
-      poNo: (v.poNo || '').trim(),
+    const body: any = {
       poDate: this.formatDate(v.poDate),
       customerId: v.customerId,
       customerContactId: v.customerContactId ?? null,
@@ -505,29 +572,129 @@ export class QuotationPoDialogComponent implements OnInit {
       consigneeSiteId: v.consigneeSiteId ?? null,
       consigneeAddressManual: v.consigneeAddressManual?.trim() || null,
       remarks: (v.remarks || '').trim() || null,
+      isLOI: this.isLOI,
+      loiText: this.isLOI ? ((v.loiText || '').trim() || null) : null,
     };
+    // poNo is only sent for formal POs; the server auto-generates
+    // ``LOI-{quotId}-{seq}`` when ``isLOI=true``.
+    if (!this.isLOI) {
+      body.poNo = (v.poNo || '').trim();
+    }
+
+    this.saving = true;
+
+    // append-cycle mode hits the cycle-scoped endpoint; the server
+    // picks the permission flag (CanCaptureLOI / CanSubmitPO) off the
+    // isLOI bool so the same dialog can satisfy both flows.
+    if (this.data.mode === 'append-cycle') {
+      if (!this.data.cycleId) {
+        this.notify.error('Missing cycle id — cannot append PO.');
+        this.saving = false;
+        return;
+      }
+      this.cycles.appendPurchaseOrder(
+        this.data.quotationId, this.data.cycleId, body,
+      ).subscribe({
+        next: () => {
+          this.notify.success(
+            this.isLOI
+              ? `LOI captured on Cycle ${this.data.cycleNo ?? ''}.`
+              : `PO captured on Cycle ${this.data.cycleNo ?? ''}.`,
+          );
+          this.dialogRef.close(true);
+        },
+        error: (err) => {
+          this.saving = false;
+          this.notify.error(
+            err?.error?.message || err?.error?.detail || 'Failed to append PO.',
+          );
+        },
+      });
+      return;
+    }
+
     // Phase 1 — capture mode hits /convert (creates Draft PO + flips
-    // quotation to Converted); the legacy /mature endpoint stays as a
-    // backward-compat single-step path but new clients use the
-    // explicit two-step Convert → Submit & Mature flow.
+    // quotation to Converted); edit mode hits /purchase-order. Both
+    // accept the same body shape (including ``isLOI`` + ``loiText``).
     const path = this.data.mode === 'capture'
       ? `/quotations/${this.data.quotationId}/convert`
       : `/quotations/${this.data.quotationId}/purchase-order`;
-    this.saving = true;
     this.api.put(path, body).subscribe({
       next: () => {
-        this.notify.success(
-          this.data.mode === 'capture'
-            ? 'PO captured. Quotation matured.'
-            : 'PO updated.',
-        );
+        this.notify.success(this.successMessage());
         this.dialogRef.close(true);
       },
       error: (err) => {
         this.saving = false;
-        this.notify.error(err?.error?.detail || 'Failed to save PO.');
+        this.notify.error(
+          err?.error?.message || err?.error?.detail || 'Failed to save.',
+        );
       },
     });
+  }
+
+  /** Show the LOI toggle in the modes where it makes semantic sense:
+   *  ``capture`` (first call-off — the user picks PO or LOI) and
+   *  ``append-cycle`` (subsequent call-offs in a cycle). Hidden in
+   *  ``edit`` mode because flipping an existing row's flavour is
+   *  not a supported transition. */
+  showLoiToggle(): boolean {
+    return this.data.mode === 'capture' || this.data.mode === 'append-cycle';
+  }
+
+  /** Track length for the LOI Text counter. */
+  get loiTextLength(): number {
+    const v = this.form.get('loiText')?.value ?? '';
+    return typeof v === 'string' ? v.length : 0;
+  }
+
+  /** Apply / clear the ``poNo`` ``required`` validator based on the
+   *  current isLOI state. Called on init and whenever the toggle
+   *  flips. Re-runs validation so the save button enables/disables
+   *  accordingly. */
+  private applyIsLoiState(): void {
+    const poNo = this.form.get('poNo');
+    if (!poNo) return;
+    if (this.isLOI) {
+      poNo.clearValidators();
+    } else {
+      poNo.setValidators([Validators.required, Validators.maxLength(50)]);
+    }
+    poNo.updateValueAndValidity({ emitEvent: false });
+  }
+
+  /** Two-way binding hook: the slide-toggle writes ``isLOI`` directly,
+   *  but we also need to re-run the validator pass. The template
+   *  binds ``(ngModelChange)`` to this so toggling doesn't lock the
+   *  Save button on a now-irrelevant required-poNo error. */
+  onIsLoiChange(): void {
+    this.applyIsLoiState();
+  }
+
+  private successMessage(): string {
+    if (this.data.mode === 'capture') {
+      return this.isLOI
+        ? 'LOI captured. Quotation converted.'
+        : 'PO captured. Quotation converted.';
+    }
+    if (this.data.mode === 'edit') return 'PO updated.';
+    return 'Saved.';
+  }
+
+  titleText(): string {
+    switch (this.data.mode) {
+      case 'capture': return this.isLOI ? 'Capture LOI' : 'Capture Purchase Order';
+      case 'edit': return 'Edit Purchase Order';
+      case 'append-cycle': return this.isLOI ? 'Capture LOI' : 'Capture Purchase Order';
+    }
+  }
+
+  saveButtonText(): string {
+    switch (this.data.mode) {
+      case 'capture': return 'Save & Mature';
+      case 'edit': return 'Save Changes';
+      case 'append-cycle': return this.isLOI ? 'Capture LOI' : 'Capture PO';
+    }
   }
 
   private formatDate(date: Date | string | null): string | null {

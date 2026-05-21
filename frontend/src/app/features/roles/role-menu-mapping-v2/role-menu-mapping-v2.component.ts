@@ -324,6 +324,8 @@ export class RoleMenuMappingV2Component implements OnInit {
       canUnlockEditPO: !!p.canUnlockEditPO,
       canUnlockEditViability: !!p.canUnlockEditViability,
       canUnlockEditAnnexure: !!p.canUnlockEditAnnexure,
+      canCaptureLOI: !!p.canCaptureLOI,
+      canStartNewCycle: !!p.canStartNewCycle,
     }));
 
     forkJoin({
@@ -421,6 +423,10 @@ export class RoleMenuMappingV2Component implements OnInit {
         target.canUnlockEditPO = copied.canUnlockEditPO;
         target.canUnlockEditViability = copied.canUnlockEditViability;
         target.canUnlockEditAnnexure = copied.canUnlockEditAnnexure;
+        // LOI / Cycle CR — Phase 1A flags. Same rule as above: without
+        // these, "Copy from" silently resets them to false on the dest.
+        target.canCaptureLOI = copied.canCaptureLOI;
+        target.canStartNewCycle = copied.canStartNewCycle;
       }
       this.flatPermissions = [...this.flatPermissions];
       this.recomputeConflicts();

@@ -19,6 +19,18 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialog/confirm-dialog.component';
+import { DEDUCTED_COST_HEADS } from './quotation-detail-dialog.component';
+import {
+  BulkApplyCandidateRow,
+  BulkApplyDialogComponent,
+  BulkApplyDialogData,
+  BulkApplyDialogResult,
+} from '../shared/bulk-apply-dialog.component';
+import {
+  SheetPreviewColumn,
+  SheetPreviewDialogComponent,
+  SheetPreviewDialogData,
+} from '../shared/sheet-preview-dialog.component';
 
 /** All cost-head keys in display order */
 const COST_HEADS: (keyof QuotLineItem)[] = [
@@ -159,6 +171,12 @@ interface ItemLength { itemLengthId: number; itemId: number; itemLength: string;
             <mat-icon>download</mat-icon>
             {{ downloading ? 'Downloading...' : 'Excel' }}
           </button>
+          <button mat-stroked-button class="toolbar-btn preview-btn"
+            (click)="openPreview()"
+            *ngIf="dataSource.data.length > 0"
+            matTooltip="Preview the sheet with blank columns hidden">
+            <mat-icon>visibility</mat-icon> Preview
+          </button>
           <button mat-stroked-button class="toolbar-btn add-btn" (click)="addRow()" *ngIf="!readOnly">
             <mat-icon>add_circle_outline</mat-icon> Add Item
           </button>
@@ -292,19 +310,22 @@ interface ItemLength { itemLengthId: number; itemId: number; itemLength: string;
             <ng-container [matColumnDef]="ch">
               <th mat-header-cell *matHeaderCellDef class="col-cost"
                 [matTooltip]="costHeadLabel(ch) + (isCellLocked(ch) ? lockReason(ch) : '')"
-                [class.locked-col]="isCellLocked(ch)">
+                [class.locked-col]="isCellLocked(ch)"
+                [class.deducted]="isDeductedHead(ch)">
                 {{ costHeadLabel(ch) }}
               </th>
               <td mat-cell *matCellDef="let row" class="col-cost"
                 [class.tp-highlight]="ch === 'TPWGST' && row[ch]"
-                [class.locked-cell]="isCellLocked(ch)">
+                [class.locked-cell]="isCellLocked(ch)"
+                [class.deducted]="isDeductedHead(ch)">
                 <span class="display-val num" *ngIf="!row.isEditing || isCellLocked(ch)">
                   {{ isCellLocked(ch) ? '0' : (row[ch] != null ? (row[ch] | number:'1.0-2') : '-') }}
                 </span>
                 <input *ngIf="row.isEditing && !isCellLocked(ch)" type="number" class="inline-num"
                   [(ngModel)]="row[ch]" [ngModelOptions]="{standalone: true}"
                   (ngModelChange)="onCostChange(row)" step="0.01" placeholder="0"
-                  [class.tp-input]="ch === 'TPWGST'" />
+                  [class.tp-input]="ch === 'TPWGST'"
+                  [class.deducted-input]="isDeductedHead(ch)" />
               </td>
             </ng-container>
           }
@@ -430,10 +451,35 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
    *  aliases ``poWorkingSheetId`` as ``quotDtlId`` so the existing
    *  PK references work uniformly. */
   @Input() mode: 'quotation' | 'po' = 'quotation';
+  /** Cycle scope for the PO-mode listing. When supplied, the grid
+   *  fetches via the cycle-aware endpoint so every active FWS row in
+   *  the cycle is visible — independent of which PO/LOI owns the FK.
+   *  Required for the soft-flow version switch to refresh correctly
+   *  when a cycle has rows tied to multiple POs (formal + LOI). */
+  @Input() cycleId?: number | null;
   @Output() expandedChange = new EventEmitter<boolean>();
 
-  /** Endpoint base for line CRUD. Switches per mode. */
+  /** Endpoint base for line CRUD. Switches per mode.
+   *
+   *  In PO mode, the LIST endpoint prefers the cycle-aware path
+   *  (``/cycles/{id}/working-sheet``) when a cycleId is supplied, so
+   *  all of the cycle's working-sheet rows are returned regardless of
+   *  which PO/LOI they're linked to. Per-line CRUD still goes through
+   *  the legacy ``/purchase-order/working-sheet/{lineId}`` path because
+   *  that route is line-PK-based and works the same either way. */
   get linesEndpoint(): string {
+    if (this.mode === 'po') {
+      if (this.cycleId) {
+        return `/quotations/${this.quotId}/cycles/${this.cycleId}/working-sheet`;
+      }
+      return `/quotations/${this.quotId}/purchase-order/working-sheet`;
+    }
+    return `/quotations/${this.quotId}/details`;
+  }
+  /** Per-line CRUD endpoint base (PUT / DELETE / POST a single line).
+   *  Stays on the legacy single-PO path because the route is line-PK
+   *  driven — backend resolves the line by id, no cycle filter needed. */
+  get lineCrudEndpoint(): string {
     return this.mode === 'po'
       ? `/quotations/${this.quotId}/purchase-order/working-sheet`
       : `/quotations/${this.quotId}/details`;
@@ -560,6 +606,13 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
     if (changes['quotId'] && !changes['quotId'].firstChange && this.quotId) {
       this.loadDetails();
     }
+    // Cycle scope change (PO mode, soft-flow) — re-fetch from the
+    // cycle-aware endpoint so the grid reflects whatever cycle the
+    // user just flipped to (and so version-switches that overwrite
+    // the cycle's working sheet show up immediately).
+    if (changes['cycleId'] && !changes['cycleId'].firstChange && this.quotId) {
+      this.loadDetails();
+    }
     // Whenever the delivery term or mode changes, re-evaluate which freight
     // column is locked and zero out the side that's now read-only so the
     // total reflects the locked state immediately.
@@ -673,6 +726,12 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
 
   costHeadLabel(key: string): string {
     return COST_HEAD_LABELS[key] || key;
+  }
+
+  /** True for cost heads stored as positive but subtracted in totRate
+   *  (CR #2). Drives red-tinted header/cell/input styling. */
+  isDeductedHead(key: string): boolean {
+    return DEDUCTED_COST_HEADS.has(key);
   }
 
   // ---- Masters ----
@@ -808,6 +867,47 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
     });
   }
 
+  // ---- Preview (CR #3) ----
+
+  /** Opens the preview modal showing the same columns but with a
+   *  hide-blank-columns toggle and Print/Excel actions. Title flips per
+   *  mode so the same component covers Working Sheet and FWS. */
+  openPreview(): void {
+    const columns: SheetPreviewColumn[] = [
+      { key: 'itemName', label: 'Item' },
+      { key: 'itemGradeName', label: 'Grade' },
+      { key: 'itemDia', label: 'Dia' },
+      { key: 'itemLength', label: 'Length' },
+      { key: 'itemUnit', label: 'Unit' },
+      { key: 'quantity', label: 'Qty', format: 'number' },
+      ...COST_HEADS.map(ch => ({
+        key: ch as string,
+        label: this.costHeadLabel(ch as string),
+        format: 'number' as const,
+        cellClass: this.isDeductedHead(ch as string) ? 'neg' : undefined,
+      })),
+      { key: 'totRate', label: 'Total Rs/MT', format: 'number' },
+      { key: 'IGST', label: 'IGST', format: 'number' },
+      { key: 'CGST', label: 'CGST', format: 'number' },
+      { key: 'SGST', label: 'SGST', format: 'number' },
+      { key: 'totAmount', label: 'EX/FOR Price', format: 'number' },
+      { key: 'modeOfDispatch', label: 'Dispatch' },
+    ];
+    const data: SheetPreviewDialogData = {
+      title: this.isPoMode ? 'Final Working Sheet — Preview' : 'Working Sheet — Preview',
+      caption: `${this.dataSource.data.length} line${this.dataSource.data.length === 1 ? '' : 's'}`,
+      columns,
+      rows: this.dataSource.data,
+      hideBlankByDefault: true,
+      onExportExcel: () => this.downloadExcel(),
+    };
+    this.dialog.open(SheetPreviewDialogComponent, {
+      width: 'auto',
+      maxWidth: '95vw',
+      data,
+    });
+  }
+
   // ---- Calculations ----
 
   onCostChange(row: QuotLineItem): void {
@@ -818,7 +918,8 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
   recalcRow(row: QuotLineItem): void {
     let total = 0;
     for (const ch of COST_HEADS) {
-      total += Number(row[ch as string]) || 0;
+      const v = Number(row[ch as string]) || 0;
+      total += DEDUCTED_COST_HEADS.has(ch as string) ? -v : v;
     }
     row.totRate = Math.round(total * 100) / 100;
 
@@ -861,7 +962,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
           }
           payload['quantity'] = payload['quantity'] || 1;
           payload['basicRate'] = payload['totRate'];
-          this.api.put(`${this.linesEndpoint}/${row.quotDtlId}`, payload).subscribe();
+          this.api.put(`${this.lineCrudEndpoint}/${row.quotDtlId}`, payload).subscribe();
         }
       }
     }
@@ -903,8 +1004,116 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
         },
         disableClose: true,
       });
-      ref.afterClosed().subscribe(result => { if (result) this.loadDetails(); });
+      ref.afterClosed().subscribe(result => {
+        if (!result) return;
+        this.loadDetails();
+        // CR #1 — FWS bulk-apply prompt. Only fires in PO (Final
+        // Working Sheet) mode and only when exactly one cost-head
+        // field changed. Multi-field edits skip the prompt to avoid
+        // chaining N modals; user can re-edit a row to propagate
+        // additional fields.
+        if (typeof result === 'object'
+            && result.mode === 'po'
+            && Array.isArray(result.changedCostHeads)
+            && result.changedCostHeads.length === 1
+            && result.sourceRowId != null) {
+          this.promptFwsBulkApply(
+            result.sourceRowId,
+            result.changedCostHeads[0],
+          );
+        }
+      });
     });
+  }
+
+  /** Opens the bulk-apply modal for one cost-head change captured by
+   *  the line-item dialog (CR #1, FWS mode). Confirmed propagation
+   *  fires per-row PUTs against the FWS endpoint. */
+  private promptFwsBulkApply(
+    sourceRowId: number,
+    change: { key: string; oldValue: number | null; newValue: number | null },
+  ): void {
+    const rows = this.dataSource.data;
+    const source = rows.find(r => r.quotDtlId === sourceRowId);
+    const otherRows = rows.filter(r => r.quotDtlId !== sourceRowId && r.quotDtlId != null);
+    if (!otherRows.length) return;  // nothing to propagate to
+
+    const data: BulkApplyDialogData = {
+      fieldLabel: this.costHeadLabel(change.key),
+      oldValue: change.oldValue,
+      newValue: change.newValue,
+      sourceRowLabel: this.rowSummary(source),
+      candidateRows: otherRows.map((r): BulkApplyCandidateRow => ({
+        id: r.quotDtlId as number,
+        label: this.rowSummary(r),
+        currentValue: (r as any)[change.key] ?? null,
+      })),
+    };
+    const ref = this.dialog.open<
+      BulkApplyDialogComponent, BulkApplyDialogData, BulkApplyDialogResult
+    >(BulkApplyDialogComponent, { width: '640px', data });
+
+    ref.afterClosed().subscribe(result => {
+      if (!result || !result.confirmed) return;
+      if (!result.applyToRowIds.length) return;  // user confirmed source only
+      this.fanOutFwsBulkApply(result.applyToRowIds, change.key, change.newValue);
+    });
+  }
+
+  /** One-line summary used in the bulk-apply modal (source preface and
+   *  per-row picker). */
+  private rowSummary(row: any): string {
+    if (!row) return '';
+    const parts = [
+      row.itemName,
+      row.itemGradeName,
+      row.itemDia ? `Ø ${row.itemDia}` : '',
+      row.itemLength,
+      row.quantity != null ? `${row.quantity} MT` : '',
+    ].filter(Boolean);
+    return parts.join(' · ');
+  }
+
+  /** Apply the bulk change to N rows via PUT. The full row is recalc'd
+   *  locally and the totRate/totAmount are recomputed before sending so
+   *  the server stays consistent without a second round-trip. */
+  private fanOutFwsBulkApply(
+    targetRowIds: (number | string)[],
+    key: string,
+    value: number | null,
+  ): void {
+    const rowsById = new Map<number | string, any>();
+    for (const r of this.dataSource.data) {
+      if (r.quotDtlId != null) rowsById.set(r.quotDtlId, r);
+    }
+    let ok = 0;
+    let failed = 0;
+    const finish = () => {
+      if (ok + failed === targetRowIds.length) {
+        if (failed === 0) {
+          this.notify.success(`Applied to ${ok} additional line${ok === 1 ? '' : 's'}.`);
+        } else {
+          this.notify.error(`Applied to ${ok}; ${failed} failed.`);
+        }
+        this.loadDetails();
+      }
+    };
+    for (const id of targetRowIds) {
+      const row = rowsById.get(id);
+      if (!row) { failed++; finish(); continue; }
+      (row as any)[key] = value;
+      this.recalcRow(row);
+      // Build payload mirroring the dialog save shape — every cost head
+      // + the recomputed totals so the server has a consistent row.
+      const payload: any = { basicRate: row.totRate };
+      for (const col of [...COST_HEADS, 'totRate', 'totAmount', 'IGST', 'CGST', 'SGST', 'gstMode']) {
+        payload[col as string] = (row as any)[col as string] ?? null;
+      }
+      this.api.put(`${this.lineCrudEndpoint}/${row.quotDtlId}`, payload).subscribe({
+        next: () => { ok++; finish(); },
+        error: () => { failed++; finish(); },
+      });
+    }
   }
 
   confirmDelete(row: QuotLineItem, index: number): void {
@@ -922,7 +1131,7 @@ export class QuotationDetailsComponent implements OnInit, OnChanges {
     });
     ref.afterClosed().subscribe(ok => {
       if (ok) {
-        this.api.delete(`${this.linesEndpoint}/${row.quotDtlId}`).subscribe({
+        this.api.delete(`${this.lineCrudEndpoint}/${row.quotDtlId}`).subscribe({
           next: () => {
             this.dataSource.data = this.dataSource.data.filter((_, i) => i !== index);
             this.notify.success('Deleted');

@@ -4,7 +4,7 @@ from app.api.v1 import (
     auth, company, users, roles, menus, masters,
     customers, enquiries, quotations, assets, email,
     org_tree, communication_logs, quotation_formats, transfers, cost_templates,
-    viability, annexure, admin,
+    viability, annexure, admin, cycles,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -31,5 +31,8 @@ api_router.include_router(viability.router, tags=["Viability"])
 # Annexure router uses full paths (/quotations/{id}/annexure and /annexure/{id}/...),
 # registered without a prefix for the same reason as viability.
 api_router.include_router(annexure.router, tags=["Annexure"])
+# Cycle router (LOI / Multi-PO CR — Phase 1C). Uses full paths
+# (/quotations/{qid}/cycles[/...]), registered without a prefix.
+api_router.include_router(cycles.router, tags=["Order Cycles"])
 # SuperAdmin-only destructive / maintenance endpoints.
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin"])

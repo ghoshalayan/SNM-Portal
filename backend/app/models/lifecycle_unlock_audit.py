@@ -30,4 +30,15 @@ class LifecycleUnlockAudit(Base, AuditMixin):
     unlockedOn = Column(DateTime, nullable=False)
     reason = Column(String(500), nullable=True)
 
+    # LOI/Cycle CR — when the unlocked stage belongs to a call-off
+    # cycle (PO / Viability / Annexure on a Cycle 2+ quotation), this
+    # captures the cycle so audit queries can join cleanly. Nullable
+    # because (a) Stage-1 quotation unlocks aren't cycle-scoped and
+    # (b) legacy audits pre-CR didn't have a cycle.
+    quotOrderCycleId = Column(
+        Integer,
+        ForeignKey("QuotOrderCycle.quotOrderCycleId"),
+        nullable=True,
+    )
+
     unlocked_by_user = relationship("User", foreign_keys=[unlockedBy])

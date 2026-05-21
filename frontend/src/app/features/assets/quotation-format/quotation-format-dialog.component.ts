@@ -281,13 +281,7 @@ const PLACEHOLDERS = [
                       </mat-form-field>
                     </div>
                     <div class="row two-col">
-                      <mat-form-field appearance="outline">
-                        <mat-label>Dimension Decimals (Dia/Length)</mat-label>
-                        <mat-select formControlName="dimensionDecimals">
-                          <mat-option [value]="0">0</mat-option>
-                          <mat-option [value]="1">1</mat-option>
-                        </mat-select>
-                      </mat-form-field>
+                      <!-- Dimension Decimals control removed: itemDia / itemLength are alphanumeric. -->
                       <mat-slide-toggle formControlName="taxShowPercent" color="primary"
                                         class="row-toggle">
                         Show <code>%</code> suffix on tax columns
@@ -758,9 +752,15 @@ export class QuotationFormatDialogComponent implements OnInit {
     const s = this.livePreviewStyle;
     return formatPrintNumber(value, s.qtyDecimals, s.roundingMode);
   }
-  formatDim(value: number): string {
-    const s = this.livePreviewStyle;
-    return formatPrintNumber(value, s.dimensionDecimals, s.roundingMode);
+  /** Dia / length are alphanumeric (``String(50)`` in the DB; "16",
+   *  "16mm", "T16", "12 MTRS"). The print component renders them via a
+   *  string passthrough; the preview must do the same — otherwise the
+   *  sample row shows ``"NaN"`` whenever the sample dia is non-numeric.
+   *  ``dimensionDecimals`` is no longer consulted; left in the saved
+   *  settings for back-compat. */
+  formatDim(value: string | number | null | undefined): string {
+    if (value == null) return '';
+    return `${value}`;
   }
 
   /** The native ``<input type="color">`` only accepts #rrggbb. When the

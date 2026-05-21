@@ -17,6 +17,14 @@ class QuotAnnexure(Base, AuditMixin):
     companyId = Column(Integer, ForeignKey("Company.companyId"), nullable=False)
     quotId = Column(Integer, ForeignKey("QuotSummary.quotId"), nullable=False)
     viabilityId = Column(Integer, ForeignKey("QuotViabilitySheet.viabilityId"), nullable=True)
+    # LOI/Cycle CR — cycle grouping. One annexure per cycle (per the
+    # CR's C2 decision). Nullable initially; flipped to NOT NULL by
+    # the backfill migration.
+    quotOrderCycleId = Column(
+        Integer,
+        ForeignKey("QuotOrderCycle.quotOrderCycleId"),
+        nullable=True,
+    )
     status = Column(String(20), default="Draft", nullable=False)
     # Per-stage versioning (Phase 1).
     parentAnnexureId = Column(

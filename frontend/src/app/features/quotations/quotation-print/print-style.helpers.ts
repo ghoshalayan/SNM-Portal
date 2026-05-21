@@ -163,8 +163,15 @@ export function formatPrintNumber(
   decimals: number,
   mode: RoundingMode,
 ): string {
-  if (value == null || Number.isNaN(value)) return '';
-  const rounded = applyRounding(value, decimals, mode);
+  // Defence-in-depth: ``Number.isNaN`` only matches the numeric NaN
+  // value — strings (including empty string and "NaN") slip past, then
+  // get coerced inside ``applyRounding`` and resurface as the literal
+  // text ``"NaN"`` via ``toLocaleString``. ``Number.isFinite(Number(x))``
+  // also rejects Infinity / -Infinity / non-numeric strings, which is
+  // what we want for currency / quantity / tax columns.
+  const n = Number(value);
+  if (value == null || !Number.isFinite(n)) return '';
+  const rounded = applyRounding(n, decimals, mode);
   return rounded.toLocaleString('en-IN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

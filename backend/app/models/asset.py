@@ -16,3 +16,11 @@ class Asset(Base, AuditMixin):
     fileType = Column(String(50), nullable=True)
     fileSize = Column(Integer, nullable=True)
     category = Column(String(30), nullable=True)  # 'general' (default) | 'po_document' | ...
+    # Per-PO scoping (LOI / Cycle CR follow-up). When a file is dropped
+    # against a specific PO / LOI row inside a cycle, the upload writes
+    # this FK so the attachments panel can scope to the active picker
+    # selection. NULL keeps legacy quotation-scoped uploads working —
+    # an asset with quotId set + quotPOId NULL is "quotation-level".
+    quotPOId = Column(
+        Integer, ForeignKey("QuotPurchaseOrder.quotPOId"), nullable=True,
+    )

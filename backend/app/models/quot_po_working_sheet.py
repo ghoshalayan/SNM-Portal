@@ -24,6 +24,13 @@ class QuotPOWorkingSheet(Base, AuditMixin):
     companyId = Column(Integer, ForeignKey("Company.companyId"), nullable=False)
     quotPOId = Column(Integer, ForeignKey("QuotPurchaseOrder.quotPOId"), nullable=False)
     sourceQuotDtlId = Column(Integer, ForeignKey("QuotDetails.quotDtlId"), nullable=True)
+    # LOI/Cycle CR — cycle grouping. Nullable initially; flipped to
+    # NOT NULL after backfill in the same migration.
+    quotOrderCycleId = Column(
+        Integer,
+        ForeignKey("QuotOrderCycle.quotOrderCycleId"),
+        nullable=True,
+    )
 
     # Identity
     itemid = Column(Integer, ForeignKey("ItemName.itemId"), nullable=True)

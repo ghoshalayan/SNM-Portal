@@ -39,10 +39,15 @@ class PurchaseOrderConflictError(RuntimeError):
 
 
 def _validate_body(db: Session, body: QuotPurchaseOrderBody, *, company_id: int) -> None:
-    if not (body.poNo or "").strip():
+    # LOIs may omit poNo (service auto-generates). Formal POs MUST
+    # carry the customer's reference — that's the field the AR team
+    # matches invoices against later.
+    if not body.isLOI and not (body.poNo or "").strip():
         raise PurchaseOrderValidationError("PO No is required.")
     if body.poDate is None:
-        raise PurchaseOrderValidationError("PO Date is required.")
+        raise PurchaseOrderValidationError(
+            "LOI Date is required." if body.isLOI else "PO Date is required.",
+        )
 
     # Customer must exist + be in the same company tenant.
     cust = db.query(CustomerMaster).filter(
@@ -113,8 +118,38 @@ def _validate_address_pair(
             )
 
 
+def _resolve_po_no(
+    db: Session, quotation: QuotSummary, body: QuotPurchaseOrderBody,
+) -> str:
+    """Produce the ``poNo`` to persist. For a formal PO this is just
+    the user-supplied value, stripped. For an LOI we auto-generate
+    ``LOI-{quotId}-{seq}`` where ``seq`` is one more than the count of
+    existing LOI rows on the quotation — keeps the identifier short,
+    stable, and unique per quotation without needing a separate
+    sequence table."""
+    if not body.isLOI:
+        return (body.poNo or "").strip()
+    existing_lois = (
+        db.query(QuotPurchaseOrder)
+        .filter(
+            QuotPurchaseOrder.quotId == quotation.quotId,
+            QuotPurchaseOrder.isLOI == True,  # noqa: E712 — SQL Server BIT
+        )
+        .count()
+    )
+    return f"LOI-{quotation.quotId}-{existing_lois + 1}"
+
+
 def get_po(db: Session, quotation: QuotSummary) -> Optional[QuotPurchaseOrder]:
-    """Fetch the active PO for a quotation, or None when not yet captured."""
+    """Fetch the active PO for a quotation, or None when not yet captured.
+
+    NB: cycle-blind. In the Phase-1B cycle world a quotation can have
+    many active POs (multiple per cycle, multiple cycles). Callers that
+    need the *currently-relevant* PO for a Stage-2 transition (Submit,
+    Reject) should use :func:`get_submit_target_po` instead. This helper
+    is kept on the surface for legacy single-cycle paths and reads where
+    "any one PO" is acceptable (visibility checks, stale-banner lookups).
+    """
     return (
         db.query(QuotPurchaseOrder)
         .filter(
@@ -123,6 +158,56 @@ def get_po(db: Session, quotation: QuotSummary) -> Optional[QuotPurchaseOrder]:
         )
         .first()
     )
+
+
+def get_submit_target_po(
+    db: Session, quotation: QuotSummary,
+) -> Optional[QuotPurchaseOrder]:
+    """Return the PO that the legacy Submit/Reject endpoints should act on.
+
+    Resolution rule:
+
+    * If the quotation has at least one **Active** cycle, scope to the
+      latest one (highest ``cycleNo``) and return the head **formal** PO
+      (``isLOI=False``) in that cycle. LOIs are ignored because Submit
+      & Mature only applies to binding orders.
+    * If there are no Active cycles, fall back to the legacy single-PO
+      lookup so pre-cycle quotations keep working unchanged.
+
+    The "head" within a cycle is the highest ``versionNo`` row — handles
+    re-source / restore scenarios where multiple PO versions co-exist.
+
+    Returning ``None`` is a legitimate "nothing to submit" signal — the
+    caller maps it to a clear 4xx instead of corrupting state.
+    """
+    # Local import — the model is loaded at module level via __init__,
+    # but pulling it in here keeps the dependency surface explicit.
+    from app.models.quot_order_cycle import QuotOrderCycle
+
+    active_cycle = (
+        db.query(QuotOrderCycle)
+        .filter(
+            QuotOrderCycle.quotId == quotation.quotId,
+            QuotOrderCycle.status == "Active",
+            QuotOrderCycle.isActive == True,  # noqa: E712
+        )
+        .order_by(QuotOrderCycle.cycleNo.desc())
+        .first()
+    )
+
+    q = db.query(QuotPurchaseOrder).filter(
+        QuotPurchaseOrder.quotId == quotation.quotId,
+        QuotPurchaseOrder.isActive == True,  # noqa: E712
+        # LOIs are non-binding; Submit & Mature targets the formal PO.
+        # ``isLOI`` is non-nullable on the model, so explicit-False is
+        # the canonical exclusion.
+        QuotPurchaseOrder.isLOI == False,  # noqa: E712
+    )
+    if active_cycle is not None:
+        q = q.filter(
+            QuotPurchaseOrder.quotOrderCycleId == active_cycle.quotOrderCycleId,
+        )
+    return q.order_by(QuotPurchaseOrder.versionNo.desc()).first()
 
 
 def create_or_update_po(
@@ -144,11 +229,20 @@ def create_or_update_po(
     _validate_body(db, body, company_id=quotation.companyId)
 
     existing = get_po(db, quotation)
+    resolved_po_no = _resolve_po_no(db, quotation, body)
+    # Whitespace-only loiText collapses to None so the DB doesn't
+    # carry meaningless padding.
+    loi_text = None
+    if body.isLOI and body.loiText:
+        stripped = body.loiText.strip()
+        loi_text = stripped or None
     if existing is None:
         po = QuotPurchaseOrder(
             companyId=quotation.companyId,
             quotId=quotation.quotId,
-            poNo=body.poNo.strip(),
+            isLOI=bool(body.isLOI),
+            loiText=loi_text,
+            poNo=resolved_po_no,
             poDate=body.poDate,
             customerId=body.customerId,
             customerContactId=body.customerContactId,
@@ -168,7 +262,7 @@ def create_or_update_po(
     # null out the FK side when the new payload uses the manual side
     # (and vice versa); the validation step above ensures exactly one
     # is populated, and we mirror that on the row.
-    existing.poNo = body.poNo.strip()
+    existing.poNo = resolved_po_no
     existing.poDate = body.poDate
     existing.customerId = body.customerId
     existing.customerContactId = body.customerContactId
@@ -177,6 +271,10 @@ def create_or_update_po(
     existing.consigneeSiteId = body.consigneeSiteId
     existing.consigneeAddressManual = (body.consigneeAddressManual or None)
     existing.remarks = (body.remarks or None)
+    # LOI-specific fields — only set them on edit when the row is an
+    # LOI; flipping a formal PO into an LOI mid-life makes no sense.
+    if existing.isLOI:
+        existing.loiText = loi_text
     existing.lastupdateby = user_id
     db.flush()
     db.refresh(existing)
@@ -214,8 +312,13 @@ def submit_po(
     Effect: PO ``status`` flips to ``Submitted``. The quotation
     stays at ``Converted`` (Stage 2 internal state changes do not
     propagate up to QuotSummary.status under the new model).
+
+    Cycle-aware: when the quotation has an Active cycle, scopes to the
+    formal-PO head of the latest one (see :func:`get_submit_target_po`).
+    Pre-cycle quotations fall through to the legacy single-PO lookup
+    inside that helper, so behaviour is unchanged for them.
     """
-    po = get_po(db, quotation)
+    po = get_submit_target_po(db, quotation)
     if po is None:
         raise PurchaseOrderConflictError(
             "No purchase order to submit — capture the PO first via Convert."
@@ -468,8 +571,12 @@ def reject_po(
     Effect: PO ``status`` flips to ``Rejected``, AND the quotation
     is un-Converted back to ``Approved`` (clearing convertedOn /
     convertedBy) so the user can Revise / re-Convert cleanly.
+
+    Cycle-aware: same scoping as :func:`submit_po` — picks the formal-PO
+    head of the latest Active cycle, falling through to the legacy
+    single-PO lookup for pre-cycle quotations.
     """
-    po = get_po(db, quotation)
+    po = get_submit_target_po(db, quotation)
     if po is None:
         raise PurchaseOrderConflictError("No purchase order to reject.")
     if po.status != "Submitted":
@@ -485,3 +592,307 @@ def reject_po(
     db.flush()
     db.refresh(po)
     return po
+
+
+# ----------------------------------------------------------------------
+# LOI / Cycle CR — cycle-scoped helpers (Phase 1B)
+# ----------------------------------------------------------------------
+# These functions are ADDITIVE — the existing single-PO functions
+# above (``get_po``, ``create_or_update_po``, ``submit_po``,
+# ``reject_po``) keep working for legacy callers during the
+# Phase 1C alias window. New callers (cycle-scoped endpoints) use
+# the helpers below.
+
+def list_purchase_orders_in_cycle(
+    db: Session, cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+) -> list[QuotPurchaseOrder]:
+    """Return every active PO + LOI row attached to a cycle, ordered
+    by ``loiSequence`` then ``createdon``. The frontend's per-cycle
+    Stage 2 list view renders against this.
+
+    SQL Server doesn't support ``ORDER BY ... NULLS LAST`` natively;
+    SQLAlchemy's ``nulls_last()`` emits raw SQL that pyodbc rejects
+    with a syntax error. Emulate the same effect with a CASE column
+    that promotes nulls to a higher value than any real sequence —
+    portable across SQL Server, sqlite, PostgreSQL, etc."""
+    from sqlalchemy import case
+    return (
+        db.query(QuotPurchaseOrder)
+        .filter(
+            QuotPurchaseOrder.quotOrderCycleId == cycle.quotOrderCycleId,
+            QuotPurchaseOrder.isActive == True,  # noqa: E712
+        )
+        .order_by(
+            case((QuotPurchaseOrder.loiSequence.is_(None), 1), else_=0),
+            QuotPurchaseOrder.loiSequence.asc(),
+            QuotPurchaseOrder.createdon.asc(),
+        )
+        .all()
+    )
+
+
+def append_purchase_order_to_cycle(
+    db: Session,
+    cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    body: QuotPurchaseOrderBody,
+    *,
+    user_id: int,
+    is_loi: bool = False,
+) -> QuotPurchaseOrder:
+    """Create a fresh PO or LOI row inside an Active cycle. **Append-only**
+    per CR decision C3 — LOIs and POs always create a new row, never
+    upgrade an existing one in place.
+
+    ``loiSequence`` is auto-assigned as the next sequential integer
+    among rows currently in the cycle, so the frontend can render
+    them in a deterministic order.
+
+    **Phase 1E rate inheritance**: when this is the FIRST PO/LOI on a
+    child cycle (cycle has parentCycleId and no FWS rows yet), the
+    helper clones the parent's last approved viability into the new
+    cycle's Final Working Sheet — falling back to the parent's WS if
+    no approved viability exists. Subsequent appends to the same cycle
+    share the cloned rows (one WS per cycle, CR decision C2).
+    """
+    if cycle.status != "Active":
+        raise PurchaseOrderConflictError(
+            f"Cannot append to a cycle in status {cycle.status!r}; "
+            "cycle must be Active."
+        )
+    # Sync the body's LOI flag with the caller's explicit kwarg so
+    # ``_validate_body`` doesn't reject a None poNo when the route
+    # forwarded ``is_loi=True`` but the body shape didn't carry the
+    # flag (e.g. older clients that forgot to set it).
+    if is_loi and not body.isLOI:
+        body.isLOI = True
+    _validate_body(db, body, company_id=cycle.companyId)
+
+    next_seq = (
+        db.query(func.max(QuotPurchaseOrder.loiSequence))
+        .filter(
+            QuotPurchaseOrder.quotOrderCycleId == cycle.quotOrderCycleId,
+            QuotPurchaseOrder.isActive == True,  # noqa: E712
+        )
+        .scalar()
+    ) or 0
+    is_first_append = next_seq == 0
+
+    # Resolve the poNo to persist. LOIs auto-generate; formal POs use
+    # the customer-supplied reference. The resolver needs a quotation
+    # object — we don't have one here, but we can hand it the cycle
+    # via a small adapter since it only reads ``quotId``.
+    _quot_adapter = type("_QA", (), {"quotId": cycle.quotId})()
+    resolved_po_no = _resolve_po_no(db, _quot_adapter, body)
+    # Whitespace-only loiText → None so the column doesn't carry padding.
+    loi_text = None
+    if body.isLOI and body.loiText:
+        stripped = body.loiText.strip()
+        loi_text = stripped or None
+
+    po = QuotPurchaseOrder(
+        companyId=cycle.companyId,
+        quotId=cycle.quotId,
+        quotOrderCycleId=cycle.quotOrderCycleId,
+        isLOI=bool(is_loi),
+        loiText=loi_text,
+        loiSequence=next_seq + 1,
+        status="Draft",
+        poNo=resolved_po_no,
+        poDate=body.poDate,
+        customerId=body.customerId,
+        customerContactId=body.customerContactId,
+        billingSiteId=body.billingSiteId,
+        billingAddressManual=(body.billingAddressManual or None),
+        consigneeSiteId=body.consigneeSiteId,
+        consigneeAddressManual=(body.consigneeAddressManual or None),
+        remarks=(body.remarks or None),
+        createdby=user_id,
+    )
+    db.add(po)
+    db.flush()
+    db.refresh(po)
+
+    # Auto-clone the parent's inheritance source into this cycle's
+    # Final Working Sheet — but only for the FIRST append on a child
+    # cycle. Subsequent appends inherit nothing (the shared WS is
+    # already populated).
+    if is_first_append and cycle.parentCycleId:
+        _clone_parent_ws_into_new_cycle(db, cycle=cycle, owning_po=po, user_id=user_id)
+
+    return po
+
+
+def submit_po_in_cycle(
+    db: Session,
+    cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    po_id: int,
+    *,
+    user_id: int,
+) -> QuotPurchaseOrder:
+    """Cycle-scoped Submit & Mature for a specific PO row.
+
+    Unambiguous replacement for the legacy ``submit_po`` — caller passes
+    the cycle (already validated against the quotation by the endpoint)
+    and the exact ``quotPOId`` of the row to submit. No
+    "guess which PO" lookups, so multi-cycle quotations don't trip on
+    the wrong row.
+
+    Pre-conditions (caller enforces RBAC + CanSubmitPO):
+      * Cycle is ``Active``.
+      * PO row belongs to this cycle, is the formal PO (``isLOI=False``),
+        and is in ``Draft``.
+
+    Effect: PO ``status`` flips to ``Submitted``. The quotation's
+    overall ``Converted`` status is unchanged — it stays at Stage 2
+    while at least one cycle has a live formal PO.
+    """
+    if cycle.status != "Active":
+        raise PurchaseOrderConflictError(
+            f"Cannot submit a PO in a cycle whose status is {cycle.status!r}; "
+            "the cycle must be Active.",
+        )
+
+    po = (
+        db.query(QuotPurchaseOrder)
+        .filter(
+            QuotPurchaseOrder.quotPOId == po_id,
+            QuotPurchaseOrder.quotOrderCycleId == cycle.quotOrderCycleId,
+            QuotPurchaseOrder.isActive == True,  # noqa: E712
+        )
+        .first()
+    )
+    if po is None:
+        raise PurchaseOrderConflictError(
+            "Purchase order not found in this cycle (or no longer active).",
+        )
+    if po.isLOI:
+        raise PurchaseOrderConflictError(
+            "LOIs are non-binding and cannot be submitted; capture a formal PO first.",
+        )
+    if po.status != "Draft":
+        raise PurchaseOrderConflictError(
+            f"PO is already {po.status}; only Draft POs can be submitted.",
+        )
+
+    po.status = "Submitted"
+    po.lastupdateby = user_id
+    db.flush()
+    db.refresh(po)
+    return po
+
+
+def reject_po_in_cycle(
+    db: Session,
+    cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    po_id: int,
+    *,
+    user_id: int,
+) -> QuotPurchaseOrder:
+    """Cycle-scoped Reject for a specific PO row.
+
+    The quotation's ``Converted`` status is un-set (back to ``Approved``)
+    only if no OTHER cycle on the same quotation still has a Submitted
+    formal PO. This preserves the legacy single-cycle un-Convert
+    behaviour while keeping the quotation Converted when a sibling
+    cycle is still alive — important for the multi-cycle Phase-1B model.
+
+    Pre-conditions (caller enforces RBAC + CanRejectPO):
+      * PO row belongs to this cycle and is currently ``Submitted``.
+
+    Effect:
+      * PO ``status`` → ``Rejected``.
+      * If no other Submitted formal PO exists on any cycle of this
+        quotation: quotation status → ``Approved``; ``convertedOn /
+        convertedBy`` cleared.
+    """
+    po = (
+        db.query(QuotPurchaseOrder)
+        .filter(
+            QuotPurchaseOrder.quotPOId == po_id,
+            QuotPurchaseOrder.quotOrderCycleId == cycle.quotOrderCycleId,
+            QuotPurchaseOrder.isActive == True,  # noqa: E712
+        )
+        .first()
+    )
+    if po is None:
+        raise PurchaseOrderConflictError(
+            "Purchase order not found in this cycle (or no longer active).",
+        )
+    if po.status != "Submitted":
+        raise PurchaseOrderConflictError(
+            f"Only Submitted POs can be rejected (current: {po.status}).",
+        )
+
+    po.status = "Rejected"
+    po.lastupdateby = user_id
+
+    # Decide whether the quotation un-Converts. It does only when this
+    # was the LAST Submitted formal PO across all cycles. Anything else
+    # means another cycle still has a live binding order, so the
+    # quotation legitimately stays Converted.
+    other_submitted_exists = (
+        db.query(QuotPurchaseOrder.quotPOId)
+        .filter(
+            QuotPurchaseOrder.quotId == cycle.quotId,
+            QuotPurchaseOrder.quotPOId != po_id,
+            QuotPurchaseOrder.status == "Submitted",
+            QuotPurchaseOrder.isLOI == False,  # noqa: E712
+            QuotPurchaseOrder.isActive == True,  # noqa: E712
+        )
+        .first()
+        is not None
+    )
+    if not other_submitted_exists:
+        quotation = (
+            db.query(QuotSummary)
+            .filter(QuotSummary.quotId == cycle.quotId)
+            .first()
+        )
+        if quotation is not None:
+            quotation.status = "Approved"
+            quotation.convertedOn = None
+            quotation.convertedBy = None
+            quotation.lastupdateby = user_id
+
+    db.flush()
+    db.refresh(po)
+    return po
+
+
+def _clone_parent_ws_into_new_cycle(
+    db: Session,
+    *,
+    cycle: "QuotOrderCycle",  # type: ignore[name-defined]  # noqa: F821
+    owning_po: QuotPurchaseOrder,
+    user_id: int,
+) -> int:
+    """Delegate to po_working_sheet_service.clone_working_sheet_for_new_cycle
+    and log the line count for the activity stream. Wrapped here so the
+    append-PO path doesn't import po_working_sheet_service at module
+    load (avoids a circular import — that service references
+    ``QuotPurchaseOrder`` in its signatures).
+
+    Returns the number of rows cloned (0 if the parent had neither an
+    approved viability nor a working sheet).
+    """
+    from app.models.quot_order_cycle import QuotOrderCycle
+    from app.services.po_working_sheet_service import clone_working_sheet_for_new_cycle
+
+    parent_cycle = (
+        db.query(QuotOrderCycle)
+        .filter(
+            QuotOrderCycle.quotOrderCycleId == cycle.parentCycleId,
+            QuotOrderCycle.isActive == True,  # noqa: E712
+        )
+        .first()
+    )
+    if parent_cycle is None:
+        return 0
+    cloned = clone_working_sheet_for_new_cycle(
+        db,
+        new_cycle=cycle,
+        parent_cycle=parent_cycle,
+        owning_po=owning_po,
+        user_id=user_id,
+    )
+    return len(cloned)

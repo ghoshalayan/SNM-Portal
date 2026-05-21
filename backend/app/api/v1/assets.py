@@ -48,6 +48,9 @@ class AssetResponse(BaseModel):
     companyId: int
     enqid: Optional[int] = None
     quotId: Optional[int] = None
+    # Per-PO/LOI scoping (LOI/Cycle CR follow-up). NULL for legacy
+    # quotation-level uploads + enquiry assets.
+    quotPOId: Optional[int] = None
     assetName: Optional[str] = None
     fileName: str
     fileUrl: str
@@ -88,6 +91,7 @@ def _get_accessible_entity_ids(db: Session, current_user: CurrentUser) -> dict:
 def get_assets(
     enqid: Optional[int] = Query(None),
     quotId: Optional[int] = Query(None),
+    quotPOId: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
@@ -101,6 +105,15 @@ def get_assets(
         q = q.filter(Asset.enqid == enqid)
     if quotId:
         q = q.filter(Asset.quotId == quotId)
+    if quotPOId is not None:
+        # Per-PO/LOI scoped fetch — used by the PO Header attachments
+        # panel after the user picks a row from the LOI/PO dropdown.
+        # quotPOId=0 means "show only quotation-scoped (NULL quotPOId)";
+        # quotPOId>0 means "show this PO's attachments".
+        if quotPOId > 0:
+            q = q.filter(Asset.quotPOId == quotPOId)
+        else:
+            q = q.filter(Asset.quotPOId.is_(None))
     if category:
         # 'general' matches both NULL and literal 'general' so legacy rows don't disappear
         if category == "general":
@@ -132,6 +145,12 @@ async def upload_asset(
     assetName: Optional[str] = Form(None),
     enqid: Optional[int] = Form(None),
     quotId: Optional[int] = Form(None),
+    # Per-PO/LOI scoping (LOI/Cycle CR follow-up). When the user drops
+    # a file against a specific PO/LOI row inside a cycle, the frontend
+    # passes this; the upload writes the FK so the attachments panel
+    # can scope to the picker selection. Optional — omitted for
+    # quotation-level uploads.
+    quotPOId: Optional[int] = Form(None),
     category: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user),
@@ -182,6 +201,7 @@ async def upload_asset(
         companyId=current_user.company_id,
         enqid=enqid,
         quotId=quotId,
+        quotPOId=quotPOId,
         assetName=assetName or None,
         fileName=result["file_name"],
         fileUrl=result["url"],

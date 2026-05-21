@@ -148,9 +148,9 @@ export class FeatureListComponent implements OnInit {
 ## Known Loopholes & Issues
 
 ### Security
-1. **Auth guard not applied to routes** - `authGuard` exists in `auth.guard.ts` but is NOT wired into `app.routes.ts`. All "protected" routes rely only on token presence in interceptor; direct URL navigation bypasses guard.
-2. **No automatic token refresh** - `refreshToken()` exists but 401 response triggers logout instead of refresh attempt. Sessions expire after 30 min requiring re-login.
-3. **Tokens in localStorage** - vulnerable to XSS. No HttpOnly cookie alternative.
+1. ~~**Auth guard not applied to routes**~~ — # Fix Done. `authGuard` is wired at the root route in `app.routes.ts` (canActivate on `path: ''`), so every child inherits it.
+2. ~~**No automatic token refresh**~~ — # Fix Done. `auth.interceptor.ts` catches 401, calls `refreshToken()`, retries the original request; concurrent 401s share a single in-flight refresh via `BehaviorSubject`. Falls back to logout if the refresh itself fails.
+3. **Tokens in localStorage** - vulnerable to XSS. HttpOnly cookies migration pending (requires backend + CSRF strategy).
 
 ### Data & UX
 4. **Hardcoded company info in quotation print** - GSTIN `27XXXXX1234Z1`, address `123 Industrial Area, Sector 5, Mumbai`, phone/email are placeholder values in `quotation-print.component.ts` (~line 91). Should come from company API.

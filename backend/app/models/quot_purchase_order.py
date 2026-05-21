@@ -1,14 +1,19 @@
-from sqlalchemy import Column, Integer, String, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, Date, ForeignKey
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.base import AuditMixin
 
 
 class QuotPurchaseOrder(Base, AuditMixin):
-    """Customer Purchase Order received against an Approved quotation.
+    """Customer Purchase Order (or LOI) received against an Approved quotation.
 
-    1:1 with QuotSummary in v1 (UNIQUE filtered index on quotId in DB).
-    Capturing this row IS the Approved → Matured transition.
+    With the LOI/Cycle CR, the v1 1:1-with-QuotSummary constraint is
+    dropped: a quotation can carry N POs and N LOIs across multiple
+    call-off cycles. The UNIQUE filtered index on quotId is removed
+    by the same migration that adds the cycle FK.
+
+    ``isLOI`` flags a row as a Letter of Intent (vs a formal PO).
+    Either flavour can mature Stage 2 of its cycle via Submit & Mature.
 
     Customer / contact / billing / consignee default from the quotation but
     each is independently overridable to support group-company billing,
@@ -22,6 +27,21 @@ class QuotPurchaseOrder(Base, AuditMixin):
     quotPOId = Column(Integer, primary_key=True, autoincrement=True)
     companyId = Column(Integer, ForeignKey("Company.companyId"), nullable=False)
     quotId = Column(Integer, ForeignKey("QuotSummary.quotId"), nullable=False)
+
+    # LOI/Cycle CR — grouping under a call-off cycle. Nullable initially
+    # to ease the migration; flipped to NOT NULL after backfill.
+    quotOrderCycleId = Column(
+        Integer,
+        ForeignKey("QuotOrderCycle.quotOrderCycleId"),
+        nullable=True,
+    )
+    # True when this row is a Letter of Intent (non-binding qty
+    # commitment) rather than a formal PO. Server-default 0 keeps
+    # existing rows as POs.
+    isLOI = Column(Boolean, default=False, nullable=False)
+    # Display order of LOIs/POs within a cycle (1, 2, 3 …). Nullable
+    # because legacy rows didn't have a cycle and don't need ordering.
+    loiSequence = Column(Integer, nullable=True)
 
     # Per-stage versioning (Phase 1) — mirrors QuotSummary's chain
     # shape so any stage can carry independent revisions.
@@ -51,6 +71,13 @@ class QuotPurchaseOrder(Base, AuditMixin):
     consigneeAddressManual = Column(String(500), nullable=True)
 
     remarks = Column(String(500), nullable=True)
+
+    # Free-text body of the LOI — the intent / scope language the
+    # customer included in their letter of intent. Nullable; only
+    # meaningful when ``isLOI = True``. Capped at 2000 chars to keep
+    # the audit trail readable while leaving room for a paragraph or
+    # two of commitment language.
+    loiText = Column(String(2000), nullable=True)
 
     # Phase 3 source-version pointer — the QuotSummary.versionNo this
     # PO was Converted from. The frontend compares this to the current

@@ -27,8 +27,12 @@ export interface CostingVersion {
 export interface CostingRow {
   detailId: number;
   itemGradeName: string;
-  itemDia: number;
-  itemLength: number;
+  // Alphanumeric in the DB (``String(50)``). The template renders these
+  // verbatim via interpolation, so there's no runtime bug — but typing
+  // them as ``number`` invites a future contributor to write arithmetic
+  // on them and silently produce NaN somewhere. Align with reality.
+  itemDia: string | null;
+  itemLength: string | null;
   itemUnit: string;
 
   // Transfer price

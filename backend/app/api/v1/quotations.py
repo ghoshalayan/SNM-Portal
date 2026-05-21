@@ -1,6 +1,6 @@
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional
@@ -16,7 +16,7 @@ from app.models.financial_year import FinancialYear
 from app.models.terms_condition import TermsNConditionMaster
 from app.models.user import User, UserRoleMap
 from app.models.company import Company
-from app.services.quotation_service import COST_HEAD_COLS
+from app.services.quotation_service import COST_HEAD_COLS, sum_cost_heads
 from app.services.costing_service import get_tp_cost_for_dia
 from app.services.activity_log_service import log_action, log_failure
 from app.schemas.quotation import (
@@ -49,6 +49,16 @@ from app.services.access_service import (
 MENU = "Quotations"
 
 router = APIRouter()
+
+
+def _mark_deprecated(response: Response, successor: str) -> None:
+    """Tag a response with RFC 8594 deprecation headers. ``successor``
+    is the path of the cycle-scoped replacement. Phase 1C alias window:
+    legacy single-PO endpoints stay live for one release so the frontend
+    can migrate; this surfaces the new path via ``Link: rel=successor-version``.
+    """
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = f'<{successor}>; rel="successor-version"'
 
 
 # ===== Search (cursor-based, for dropdown lookups) =====
@@ -893,6 +903,7 @@ def approve_quotation(
 def mature_quotation(
     quot_id: int,
     body: QuotPurchaseOrderBody,
+    response: Response,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
@@ -904,7 +915,13 @@ def mature_quotation(
     overridable for group-company billing), and billing + consignee
     addresses. For each address pair the body must populate exactly
     one of (siteId, addressManual) — see ``purchase_order_service``.
+
+    Deprecated by the LOI / Cycle CR — use
+    ``POST /quotations/{qid}/cycles`` to open a cycle, then
+    ``POST /quotations/{qid}/cycles/{cId}/purchase-orders`` to append
+    the PO. Kept live for one release as a back-compat alias.
     """
+    _mark_deprecated(response, f"/api/v1/quotations/{quot_id}/cycles")
     try:
         require_permission(MENU, "CanApprove", ctx)
         quot = _get_quot_or_403(db, quot_id, ctx)
@@ -952,11 +969,19 @@ def mature_quotation(
 )
 def get_purchase_order(
     quot_id: int,
+    response: Response,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
     """Fetch the active PO for a quotation, or null when one hasn't been
-    captured yet (e.g. quotation still in Draft / Approved)."""
+    captured yet (e.g. quotation still in Draft / Approved).
+
+    Deprecated — replaced by the cycle bundle endpoint
+    ``GET /quotations/{qid}/cycles/{cId}/bundle`` which returns every
+    PO + LOI inside the cycle plus lite refs to the WS/viability/annexure
+    head ids.
+    """
+    _mark_deprecated(response, f"/api/v1/quotations/{quot_id}/cycles")
     require_permission(MENU, "CanRead", ctx)
     quot = _get_quot_or_403(db, quot_id, ctx)
     return purchase_order_service.get_po(db, quot)
@@ -966,6 +991,7 @@ def get_purchase_order(
 def update_purchase_order(
     quot_id: int,
     body: QuotPurchaseOrderBody,
+    response: Response,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
@@ -973,7 +999,13 @@ def update_purchase_order(
     quotation is in Matured status — once viability work begins
     (status = ViabilityGenerated or later) the PO is locked so the
     downstream artifacts can't drift from the source they were
-    generated against. 409 in that case."""
+    generated against. 409 in that case.
+
+    Deprecated — append a fresh PO/LOI to a new cycle instead of
+    editing the captured row in place. See
+    ``POST /quotations/{qid}/cycles/{cId}/purchase-orders``.
+    """
+    _mark_deprecated(response, f"/api/v1/quotations/{quot_id}/cycles")
     try:
         require_permission(MENU, "CanApprove", ctx)
         quot = _get_quot_or_403(db, quot_id, ctx)
@@ -1055,47 +1087,74 @@ def convert_quotation(
 ):
     """Stage-1 forward gate: ``Approved → Converted``.
 
-    Captures the customer PO atomically with the status transition
-    (same body shape as legacy /mature), but leaves the PO row in
-    ``Draft`` so the user can fill in the Final Working Sheet (Phase
-    1.5) before firing /purchase-order/submit.
+    Captures the customer's first call-off atomically with the status
+    transition. Same body shape as legacy /mature, with one twist:
+    the call-off can be either a formal PO (``isLOI=false``, default)
+    or a Letter of Intent (``isLOI=true``) — the latter omits ``poNo``
+    (server auto-generates one) and may carry ``loiText`` for the
+    customer's intent / scope language.
+
+    Permission gate is picked from ``isLOI``: ``CanCaptureLOI`` for
+    non-binding LOIs (looser, KRO-and-above), ``CanConvert`` for
+    formal PO conversion (HOD-and-above). Both flavours leave the row
+    in ``Draft`` so the user can edit the Final Working Sheet before
+    Submit & Mature.
     """
     try:
-        require_permission(MENU, "CanConvert", ctx)
+        required_flag = "CanCaptureLOI" if body.isLOI else "CanConvert"
+        require_permission(MENU, required_flag, ctx)
         quot = _get_quot_or_403(db, quot_id, ctx)
         if quot.status != "Approved":
             raise HTTPException(
                 400,
                 f"Only Approved quotations can be Converted (current: {quot.status})",
             )
+
+        # Phase 1 cycle alignment: Convert is the act of opening
+        # Cycle #1 and capturing the first call-off in it. Routing
+        # through ``start_new_cycle`` + ``append_purchase_order_to_cycle``
+        # keeps the cycle FK populated on both the PO row and the
+        # working-sheet rows (Phase 1A made those columns NOT NULL).
+        # The cycle service handles the Approved → Converted flip
+        # plus ``convertedOn / convertedBy`` stamping.
+        from app.services.cycle_service import (
+            CycleValidationError, start_new_cycle,
+        )
         try:
-            po = purchase_order_service.create_or_update_po(
-                db, quot, body, user_id=ctx.user_id,
+            cycle = start_new_cycle(db, quot, started_by=ctx.user_id)
+        except CycleValidationError as exc:
+            raise HTTPException(400, str(exc))
+        try:
+            po = purchase_order_service.append_purchase_order_to_cycle(
+                db, cycle, body,
+                user_id=ctx.user_id, is_loi=body.isLOI,
             )
         except purchase_order_service.PurchaseOrderValidationError as exc:
             raise HTTPException(400, str(exc))
+        except purchase_order_service.PurchaseOrderConflictError as exc:
+            raise HTTPException(409, str(exc))
 
-        po.status = "Draft"
         # Phase 3 freshness pointer — record which quotation version
         # this PO was Converted from. The frontend compares this to
         # the current quotation head to surface a stale banner if the
         # quotation is later Revised.
         po.sourcedFromQuotationVersion = quot.versionNo
-        quot.status = "Converted"
-        quot.convertedOn = now_ist()
-        quot.convertedBy = ctx.user_id
-        quot.lastupdateby = ctx.user_id
         # Clone the quotation's Working Sheet into the PO's Final
         # Working Sheet so the user can immediately tweak qty / cost
-        # heads on the Stage-2 grid. Idempotent on re-Convert (e.g.
-        # after a Reject) — preserves any in-flight edits.
+        # heads on the Stage-2 grid. ``clone_from_quotation`` copies
+        # the cycle FK off the owning PO so the new WS rows satisfy
+        # the Phase 1A NOT NULL constraint.
         cloned = po_working_sheet_service.clone_from_quotation(
             db, po, quot, user_id=ctx.user_id,
         )
+        kind = "LOI" if body.isLOI else "PO"
         log_action(
             db, quot_id=quot.quotId, company_id=quot.companyId,
             action="Converted", status=quot.status, user_id=ctx.user_id,
-            details=f"PO {po.poNo} dated {po.poDate} · {len(cloned)} working-sheet lines cloned",
+            details=(
+                f"{kind} {po.poNo} dated {po.poDate} · "
+                f"{len(cloned)} working-sheet lines cloned · cycle #{cycle.cycleNo}"
+            ),
         )
         db.commit()
         db.refresh(quot)
@@ -1143,69 +1202,52 @@ def reactivate_quotation(
         raise
 
 
-@router.put("/{quot_id}/purchase-order/submit", response_model=QuotPurchaseOrderResponse)
+@router.put("/{quot_id}/purchase-order/submit")
 def submit_purchase_order(
     quot_id: int,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """Stage-2 forward gate: PO ``Draft → Submitted``. Quotation
-    stays at ``Converted`` (Stage-2 internal state)."""
-    try:
-        require_permission(MENU, "CanSubmitPO", ctx)
-        quot = _get_quot_or_403(db, quot_id, ctx)
-        if quot.status != "Converted":
-            raise HTTPException(
-                400, f"PO can only be submitted while the quotation is Converted (current: {quot.status})",
-            )
-        try:
-            po = purchase_order_service.submit_po(db, quot, user_id=ctx.user_id)
-        except purchase_order_service.PurchaseOrderConflictError as exc:
-            raise HTTPException(409, str(exc))
-        log_action(
-            db, quot_id=quot.quotId, company_id=quot.companyId,
-            action="PO Submitted & Matured", status=quot.status,
-            user_id=ctx.user_id,
-            details=f"PO {po.poNo} v{po.versionNo}",
-        )
-        db.commit()
-        db.refresh(po)
-        return po
-    except Exception as e:
-        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
-                    action="PO Submit", user_id=ctx.user_id, exc=e)
-        raise
+    """Removed under the soft-flow redesign (Slice C, 2026-05-20).
+
+    The PO Submit/Reject state machine was retired in favour of the
+    FWS Approve workflow: each Approve on the Final Working Sheet
+    creates a new versioned snapshot, which is what advances the
+    cycle's lifecycle. POs are now append-only records; withdrawing
+    a PO is a ``DELETE /cycles/{cId}/purchase-orders/{poId}``
+    (soft-delete) instead of a state transition.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "PO Submit & Mature is no longer required. Use "
+            "POST /quotations/{quotId}/cycles/{cycleId}/fws/approve "
+            "to approve the Final Working Sheet — that's what advances "
+            "the cycle lifecycle now."
+        ),
+    )
 
 
-@router.put("/{quot_id}/purchase-order/reject", response_model=QuotSummaryResponse)
+@router.put("/{quot_id}/purchase-order/reject")
 def reject_purchase_order(
     quot_id: int,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """Stage-2 backward escape: PO ``Submitted → Rejected``, AND
-    quotation un-Converts back to ``Approved`` so the user can
-    Revise / re-Convert cleanly."""
-    try:
-        require_permission(MENU, "CanRejectPO", ctx)
-        quot = _get_quot_or_403(db, quot_id, ctx)
-        try:
-            po = purchase_order_service.reject_po(db, quot, user_id=ctx.user_id)
-        except purchase_order_service.PurchaseOrderConflictError as exc:
-            raise HTTPException(409, str(exc))
-        log_action(
-            db, quot_id=quot.quotId, company_id=quot.companyId,
-            action="PO Rejected (un-Converted)", status=quot.status,
-            user_id=ctx.user_id,
-            details=f"PO {po.poNo} → Rejected; quotation back to Approved",
-        )
-        db.commit()
-        db.refresh(quot)
-        return quot
-    except Exception as e:
-        log_failure(db, quot_id=quot_id, company_id=ctx.company_id,
-                    action="PO Reject", user_id=ctx.user_id, exc=e)
-        raise
+    """Removed under the soft-flow redesign (Slice C, 2026-05-20).
+
+    POs no longer have a Submitted/Rejected lifecycle. To withdraw a PO,
+    soft-delete it via ``DELETE /cycles/{cId}/purchase-orders/{poId}``.
+    To roll back a whole cycle, use the existing cycle Abandon endpoint.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "PO Reject is no longer required. To withdraw a PO, use "
+            "DELETE /quotations/{quotId}/cycles/{cycleId}/purchase-orders/{poId}. "
+            "To roll back a cycle, use POST /cycles/{cycleId}/abandon."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2093,8 +2135,8 @@ def import_details_from_enquiry(
             if tp is not None:
                 cost_data["TPWGST"] = tp
 
-        # Calculate totRate = sum of all cost heads
-        tot_rate = sum(v for v in [cost_data.get(c) for c in COST_HEAD_COLS] if v)
+        # totRate = sum of cost heads with CD + SplDisc deducted (CR #2)
+        tot_rate = sum_cost_heads(cost_data)
         gst_amount = round(tot_rate * 0.18, 2) if tot_rate else 0
         ex_for = round(tot_rate + gst_amount, 2) if tot_rate else 0
 

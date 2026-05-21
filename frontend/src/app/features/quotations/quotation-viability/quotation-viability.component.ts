@@ -14,15 +14,36 @@ import { MatBadgeModule } from '@angular/material/badge';
 import { MatSelectModule } from '@angular/material/select';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
+import { MatDatepickerModule } from '@angular/material/datepicker';
+import { MatNativeDateModule } from '@angular/material/core';
 
 import { environment } from '../../../../environments/environment';
 import { ApiService } from '../../../core/services/api.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { MenuService } from '../../../core/services/menu.service';
 import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
-import { VersionSelectorComponent } from '../version-selector/version-selector.component';
 import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
+import {
+  CycleService,
+  ViabilityApprovalSnapshot,
+} from '../services/cycle.service';
+import {
+  VersionInlinePickerComponent,
+  VersionInlineItem,
+} from '../shared/version-inline-picker.component';
 import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialog/confirm-dialog.component';
+import {
+  BulkApplyCandidateRow,
+  BulkApplyDialogComponent,
+  BulkApplyDialogData,
+  BulkApplyDialogResult,
+} from '../shared/bulk-apply-dialog.component';
+import {
+  SheetPreviewColumn,
+  SheetPreviewDialogComponent,
+  SheetPreviewDialogData,
+} from '../shared/sheet-preview-dialog.component';
 import {
   TextPromptDialogComponent,
   TextPromptDialogData,
@@ -39,7 +60,7 @@ import {
 const COST_HEADS = ['TPWGST', ...ADJUSTABLE_HEADS];
 
 // Column meta for the working-sheet table (read-only snapshot).
-interface ColMeta { key: string; label: string; width: string; num?: boolean; neg?: boolean; }
+interface ColMeta { key: string; label: string; width: string; num?: boolean; neg?: boolean; deducted?: boolean; }
 
 /** Rendered in the savings summary strip below the two tables. */
 interface SavingsRow {
@@ -55,7 +76,13 @@ interface SavingsRow {
   /** true when dia differs between working sheet and viability — excluded from grand total. */
   excluded: boolean;
 }
+// Light-red text only (subtractive in totals via goal-seek before CR #2,
+// or kept for visual context). CD + SplDisc graduate to a heavier
+// `deducted` styling per CR #2 — see DEDUCTED_KEYS below.
 const NEGATIVE_KEYS = new Set(['CD', 'ShortLnthCharge', 'SplDisc']);
+// Cost heads users enter positively but the math subtracts (CR #2).
+// Kept in sync with the backend ``DEDUCTED_COST_HEADS`` constant.
+const DEDUCTED_KEYS = new Set(['CD', 'SplDisc']);
 
 function headCol(key: string): ColMeta {
   return {
@@ -64,6 +91,7 @@ function headCol(key: string): ColMeta {
     width: '90px',
     num: true,
     neg: NEGATIVE_KEYS.has(key),
+    deducted: DEDUCTED_KEYS.has(key),
   };
 }
 
@@ -113,9 +141,9 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
     MatCardModule, MatButtonModule, MatIconModule, MatDialogModule,
     MatProgressSpinnerModule, MatTooltipModule, MatMenuModule,
     MatCheckboxModule, MatBadgeModule, MatSelectModule, MatFormFieldModule,
-    MatInputModule,
-    VersionSelectorComponent,
+    MatInputModule, MatButtonToggleModule, MatDatepickerModule, MatNativeDateModule,
     StaleBannerComponent,
+    VersionInlinePickerComponent,
   ],
   template: `
     <mat-card class="stage-card viab-card">
@@ -129,13 +157,15 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
                 <span class="stage-status-chip" [class.is-approved]="sheet.status === 'Approved'">
                   {{ sheet.status }}
                 </span>
-                <app-version-selector
-                  [quotId]="quotId"
-                  stage="viability"
-                  [headVersion]="sheet.versionNo || 1"
-                  [canRestore]="canUnlockEditViability"
-                  (restored)="stageChanged.emit()">
-                </app-version-selector>
+                @if (snapshots.length > 0) {
+                  <app-version-inline-picker
+                    [items]="versionItems"
+                    [currentId]="currentSnapshotId"
+                    [busy]="busy || switching"
+                    [headLabel]="'Viability versions'"
+                    (picked)="onVersionPicked($event)">
+                  </app-version-inline-picker>
+                }
               }
             </div>
             <div class="stage-card-head-meta">
@@ -177,17 +207,27 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
             </mat-menu>
           }
           @if (sheet && sheet.status === 'Draft' && canApprove) {
-            <button mat-stroked-button color="primary" (click)="approve()" [disabled]="busy">
+            <button mat-stroked-button color="primary" (click)="approve()" [disabled]="busy || switching">
               <mat-icon>verified</mat-icon> Approve Viability
             </button>
           }
-          @if (sheet && sheet.status === 'Approved' && canUnlockEditViability) {
+          @if (sheet && canApprove) {
+            <button mat-stroked-button color="primary" (click)="regenerate()" [disabled]="busy || switching"
+              matTooltip="Pick a different FWS version or past Viability version as the source and build a fresh draft from it. Carries goal-seek state forward when sourcing from a past Viability.">
+              <mat-icon>refresh</mat-icon> Re-generate
+            </button>
+          }
+          @if (sheet && sheet.status === 'Approved' && canUnlockEditViability && !unlockEditHidden) {
             <button mat-stroked-button color="warn" (click)="openUnlockDialog()" [disabled]="busy"
               matTooltip="Privileged: unlock this approved viability sheet for in-place edits (audited)">
               <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
             </button>
           }
           @if (sheet) {
+            <button mat-stroked-button (click)="openPreview()" [disabled]="busy"
+              matTooltip="Preview the viability sheet with blank columns hidden">
+              <mat-icon>visibility</mat-icon> Preview
+            </button>
             <button mat-stroked-button (click)="downloadExcel()" [disabled]="busy"
               matTooltip="Download both sheets in one workbook">
               <mat-icon>download</mat-icon> Download Excel
@@ -205,8 +245,95 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
           [message]="viabStaleMessage()"
           [canResource]="canUnlockEditViability"
           [busy]="resourcing"
-          (resource)="reSource.emit()">
+          [hideAction]="true">
         </app-stale-banner>
+
+        <!-- Soft-flow approval banner. Appears once the sheet is Approved;
+             edits remain allowed but they're recorded as "after approval"
+             entries in the activity log. The frozen "what was signed off"
+             version lives in QuotViabilityApprovalSnapshot (SF6). -->
+        @if (sheet && sheet.status === 'Approved') {
+          <div class="soft-flow-banner">
+            <mat-icon class="banner-icon">verified</mat-icon>
+            <div class="banner-text">
+              <strong>This viability sheet was approved.</strong>
+              You can still edit it — any changes are recorded in the
+              activity log as post-approval edits. The version signed
+              off at approval is preserved in the approval-snapshot
+              history.
+            </div>
+          </div>
+        }
+
+        <!-- TP-Cost sourcing toggle (Viability TP-Cost CR).
+             Two modes: rate effective on a user-picked date, or rate
+             effective on the parent quotation's approval date. Bulk-
+             refresh runs immediately on flip; a confirm dialog
+             interrupts if any line has a manual TPWGST edit. Under
+             soft flow the toggle stays enabled post-approval — the
+             refresh just produces a journaled post-approval edit. -->
+        @if (sheet) {
+          <div class="tp-cost-strip">
+            <div class="tp-left">
+              <mat-icon class="tp-icon">payments</mat-icon>
+              <span class="tp-label">TP Cost source</span>
+              <mat-button-toggle-group
+                [value]="tpCostMode"
+                (change)="onTpCostModeChange($event.value)"
+                [disabled]="refreshingTp"
+                class="tp-toggle">
+                <mat-button-toggle value="as_of_date"
+                                   matTooltip="Use rate from the master effective on the selected date">
+                  <mat-icon>event</mat-icon>
+                  Selected Datewise
+                </mat-button-toggle>
+                <mat-button-toggle value="po_working_sheet"
+                                   [matTooltip]="hasPoWorkingSheet
+                                     ? 'Use the TPWGST that was frozen on the Final Working Sheet when the PO was captured'
+                                     : 'No PO Final Working Sheet exists for this quotation yet'"
+                                   [disabled]="!hasPoWorkingSheet">
+                  <mat-icon>inventory_2</mat-icon>
+                  LTP on WS @PO
+                </mat-button-toggle>
+              </mat-button-toggle-group>
+
+              @if (tpCostMode === 'as_of_date') {
+                <mat-form-field appearance="outline" class="tp-date">
+                  <mat-label>As-of date</mat-label>
+                  <input matInput [matDatepicker]="tpDatePicker"
+                         [value]="tpCostAsOfDate"
+                         (dateChange)="onTpCostDateChange($event.value)"
+                         [disabled]="refreshingTp"
+                         placeholder="Today" />
+                  <mat-datepicker-toggle matSuffix [for]="tpDatePicker"></mat-datepicker-toggle>
+                  <mat-datepicker #tpDatePicker></mat-datepicker>
+                </mat-form-field>
+              } @else {
+                <span class="tp-approved-hint">
+                  <mat-icon class="tp-hint-ico">inventory_2</mat-icon>
+                  From <strong>PO Final Working Sheet</strong>
+                </span>
+              }
+            </div>
+            <div class="tp-right">
+              @if (refreshingTp) {
+                <mat-spinner diameter="18"></mat-spinner>
+                <span class="tp-busy">Refreshing TP Cost…</span>
+              } @else if (lastRefreshSummary) {
+                <span class="tp-summary" [matTooltip]="lastRefreshTooltip()">
+                  <mat-icon class="ok-ico">check_circle</mat-icon>
+                  Updated {{ lastRefreshSummary.updatedCount }}
+                  @if (lastRefreshSummary.skippedManualCount) {
+                    · skipped {{ lastRefreshSummary.skippedManualCount }} manual
+                  }
+                  @if (lastRefreshSummary.missingRateCount) {
+                    · <span class="warn">{{ lastRefreshSummary.missingRateCount }} missing</span>
+                  }
+                </span>
+              }
+            </div>
+          </div>
+        }
         @if (loading) {
           <div class="viab-spinner"><mat-spinner diameter="40"></mat-spinner></div>
         } @else if (!sheet) {
@@ -229,6 +356,7 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
                   @for (c of visibleWorkingCols(); track c.key) {
                     <th [style.min-width]="c.width"
                         [class.neg]="c.neg"
+                        [class.deducted]="c.deducted"
                         [class.totrate]="c.key === 'totRate'">
                       {{ c.label }}
                     </th>
@@ -241,6 +369,7 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
                     @for (c of visibleWorkingCols(); track c.key) {
                       <td [class.num]="c.num"
                           [class.neg]="c.neg"
+                          [class.deducted]="c.deducted"
                           [class.totrate]="c.key === 'totRate'">
                         {{ displayValue(row, c, i + 1) }}
                       </td>
@@ -265,6 +394,7 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
                   @for (c of visibleViabilityCols(); track c.key) {
                     <th [style.min-width]="c.width"
                         [class.neg]="c.neg"
+                        [class.deducted]="c.deducted"
                         [class.gross]="isGross(c.key)"
                         [class.totrate]="c.key === 'totRate'"
                         [class.sticky-dia]="c.key === 'itemDia'"
@@ -277,9 +407,10 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
               </thead>
               <tbody>
                 @for (row of sheet.lines; track row.viabilityLineId; let i = $index) {
-                  <tr>
+                  <tr [class.missing-rate]="missingRateLineIds.has(row.viabilityLineId)">
                     @for (c of visibleViabilityCols(); track c.key) {
                       <td [class.num]="c.num" [class.neg]="c.neg"
+                          [class.deducted]="c.deducted"
                           [class.gross]="isGross(c.key)"
                           [class.totrate]="c.key === 'totRate'"
                           [class.sticky-dia]="c.key === 'itemDia'"
@@ -514,7 +645,124 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
     }
     .viab-table td.num, .viab-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
     .viab-table .neg { color: #ef5350; }
+    /* CR #2 — CD + Spl. Discount: heavy red wash so the user sees these
+       columns behave as deductions (positive entry → negative effect on
+       totRate). Overrides .neg's lighter color. */
+    .viab-table th.deducted {
+      background: rgba(229, 57, 53, 0.18) !important;
+      color: #c62828 !important;
+    }
+    .viab-table td.deducted {
+      background: rgba(229, 57, 53, 0.08);
+      color: #c62828 !important;
+      font-weight: 500;
+    }
+    .viab-table td.deducted input {
+      color: #c62828 !important;
+      font-weight: 600;
+    }
     .viab-table .gross { background: rgba(255, 242, 204, 0.35); }
+
+    /* Soft-flow approval banner (SF5). Appears when sheet.status ===
+       'Approved' to make it visually obvious that subsequent edits are
+       being recorded as post-approval changes — replaces the old "locked
+       and disabled" affordance with informed-consent UX. */
+    .soft-flow-banner {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      background: rgba(255, 220, 100, 0.18);
+      border: 1px solid rgba(200, 150, 30, 0.45);
+      border-left: 4px solid rgba(200, 150, 30, 0.85);
+      border-radius: 6px;
+      color: var(--snm-text-primary);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .soft-flow-banner .banner-icon {
+      color: rgba(200, 150, 30, 1);
+      margin-top: 1px;
+      flex: 0 0 auto;
+    }
+    .soft-flow-banner .banner-text strong { display: block; }
+
+    /* TP-Cost sourcing strip (Viability TP-Cost CR). Sits above the
+       working-sheet table and stays visible while scrolling. */
+    .tp-cost-strip {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      background: var(--snm-bg-panel);
+      border: 1px solid var(--snm-border-divider);
+      border-radius: 6px;
+      flex-wrap: wrap;
+    }
+    .tp-cost-strip.tp-locked { opacity: 0.85; }
+    .tp-left, .tp-right {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .tp-icon { color: var(--snm-accent); }
+    .tp-label {
+      font-weight: 600; font-size: 13px; color: var(--snm-text-primary);
+    }
+    .tp-toggle ::ng-deep .mat-button-toggle {
+      font-size: 12px;
+    }
+    .tp-toggle ::ng-deep .mat-button-toggle mat-icon {
+      font-size: 16px; width: 16px; height: 16px;
+      vertical-align: middle; margin-right: 4px;
+    }
+    .tp-date { width: 200px; margin-top: 4px; }
+    .tp-date ::ng-deep .mat-mdc-form-field-infix {
+      padding-top: 6px !important; padding-bottom: 6px !important;
+      min-height: 32px;
+    }
+    .tp-approved-hint {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px;
+      color: var(--snm-text-secondary);
+      padding: 4px 10px;
+      background: var(--snm-accent-subtle);
+      border-radius: 4px;
+    }
+    .tp-hint-ico {
+      font-size: 14px; width: 14px; height: 14px;
+      color: var(--snm-accent);
+    }
+    .tp-busy {
+      font-size: 12px; color: var(--snm-text-secondary);
+    }
+    .tp-summary {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; color: var(--snm-text-secondary);
+      padding: 4px 10px;
+      background: var(--snm-bg-card);
+      border-radius: 4px;
+    }
+    .tp-summary .ok-ico {
+      color: #2e7d32; font-size: 16px; width: 16px; height: 16px;
+    }
+    .tp-summary .warn { color: #c62828; font-weight: 600; }
+    /* Missing-rate row highlight — applied to the viability table row
+       when the line's viabilityLineId is in missingRateLineIds. */
+    .viab-table tr.missing-rate td {
+      background: rgba(229, 57, 53, 0.05) !important;
+    }
+    .viab-table tr.missing-rate td.totrate { background: rgba(229, 57, 53, 0.10) !important; }
+    .missing-chip {
+      display: inline-flex; align-items: center; gap: 2px;
+      margin-left: 4px;
+      padding: 1px 6px;
+      background: rgba(229, 57, 53, 0.12);
+      color: #c62828;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .missing-chip mat-icon {
+      font-size: 12px; width: 12px; height: 12px;
+    }
 
     /* Total Rs/MT — static / computed, never directly editable.
        Opaque band makes it read as a result column, not a tuning knob. */
@@ -653,6 +901,10 @@ export class QuotationViabilityComponent implements OnChanges {
   // Phase 1 Unlock-and-Edit flag for the Viability stage. Resolved
   // from the menu service in the constructor (privileged users only).
   canUnlockEditViability = false;
+  /** Feature flag — hides the in-place Unlock & Edit button regardless
+   *  of permission. Restore / Re-source (which share the same gate) are
+   *  unaffected. Flip to ``false`` to re-enable. */
+  readonly unlockEditHidden = true;
   // Phase 3 — current PO head versionNo (the upstream this stage
   // sources from). Parent passes it; we compare to ``sheet.sourcedFromPOVersion``
   // to surface a stale banner when the PO has moved on.
@@ -676,6 +928,51 @@ export class QuotationViabilityComponent implements OnChanges {
 
   loading = false;
   busy = false;
+
+  // ---- Version-switch state (soft-flow Slice H) ----
+  /** Cached snapshot list for the current viability head. Refreshed on
+   *  load + after every approve/switch. Drives the Switch Version
+   *  button visibility and the dialog's picker. */
+  snapshots: ViabilityApprovalSnapshot[] = [];
+  /** Snapshot id the editor was last loaded from — highlighted as
+   *  "current" in the switch dialog. */
+  currentSnapshotId: number | null = null;
+  /** True while a version-switch round-trip is in flight. Disables
+   *  the action buttons so the user can't fire two restores in
+   *  parallel. */
+  switching = false;
+
+  /** Inline-picker items derived from ``snapshots``. */
+  get versionItems(): VersionInlineItem[] {
+    return this.snapshots.map(s => ({
+      id: s.snapshotId,
+      label: `V${s.versionNo}`,
+      approvedAt: s.approvedAt,
+      approvedByName: s.approvedByName,
+    }));
+  }
+
+  // ---- TP-Cost sourcing toggle (Viability TP-Cost CR) ----
+  /** Mode picked in the toggle group. Hydrated from sheet.tpCostMode on
+   *  load; falls back to 'as_of_date' for legacy sheets. */
+  tpCostMode: 'as_of_date' | 'po_working_sheet' = 'as_of_date';
+  /** Date picker value when mode is 'as_of_date'. null = today. */
+  tpCostAsOfDate: Date | null = null;
+  /** True when this quotation's PO has a Final Working Sheet —
+   *  enables the "LTP on WS @PO" toggle option. False when no PO
+   *  exists yet or its FWS hasn't been populated. */
+  hasPoWorkingSheet = false;
+  /** Lines flagged "missing_rate" by the last refresh — rendered as
+   *  warning chips. Keyed by viabilityLineId. */
+  missingRateLineIds = new Set<number>();
+  /** True while the refresh PUT is in flight; disables the toggle. */
+  refreshingTp = false;
+  /** Summary of the most recent refresh — shown next to the toggle. */
+  lastRefreshSummary: {
+    updatedCount: number;
+    skippedManualCount: number;
+    missingRateCount: number;
+  } | null = null;
 
   // ---- Column visibility (shared between both grids) ----
   private readonly COL_PREFS_KEY = 'snm-viab-cols';
@@ -735,6 +1032,7 @@ export class QuotationViabilityComponent implements OnChanges {
     private notify: NotificationService,
     private dialog: MatDialog,
     private menuService: MenuService,
+    private cycleService: CycleService,
   ) {
     this.canUnlockEditViability = this.menuService.hasPermission(
       'Quotations', 'canUnlockEditViability',
@@ -888,6 +1186,9 @@ export class QuotationViabilityComponent implements OnChanges {
         this.loading = false;
         this.workingSheet = res.workingSheet || [];
         this.sheet = res.viability || null;
+        this.hasPoWorkingSheet = !!res.hasPoWorkingSheet;
+        this.hydrateTpCostState();
+        this.refreshSnapshotList();
       },
       error: (e) => {
         this.loading = false;
@@ -896,14 +1197,53 @@ export class QuotationViabilityComponent implements OnChanges {
     });
   }
 
-  generate(): void {
+  /** Re-fetch the approval snapshot list for the current viability
+   *  head. Used after load, approve, regenerate, and switch so the
+   *  picker stays in sync with the backend. */
+  private refreshSnapshotList(): void {
+    if (!this.sheet?.viabilityId) {
+      this.snapshots = [];
+      this.currentSnapshotId = null;
+      return;
+    }
+    this.cycleService.listViabilitySnapshots(this.sheet.viabilityId).subscribe({
+      next: (res) => {
+        this.snapshots = res?.items || [];
+        if (this.currentSnapshotId == null && this.snapshots.length > 0) {
+          this.currentSnapshotId = this.snapshots[0].snapshotId;
+        }
+      },
+      error: () => { this.snapshots = []; },
+    });
+  }
+
+  /** Internal: POST to the generate endpoint with an optional source.
+   *  Both first-time generate and re-generate funnel through this so
+   *  the success/failure handling stays in one place. */
+  private postGenerate(
+    sourcedFromFWSSnapshotId: number | null,
+    sourcedFromViabilitySnapshotId: number | null = null,
+  ): void {
     if (!this.quotId) return;
     this.busy = true;
-    this.api.post<any>(`/quotations/${this.quotId}/viability`, {}).subscribe({
+    const body: Record<string, number> = {};
+    if (sourcedFromFWSSnapshotId != null) {
+      body['sourcedFromFWSSnapshotId'] = sourcedFromFWSSnapshotId;
+    }
+    if (sourcedFromViabilitySnapshotId != null) {
+      body['sourcedFromViabilitySnapshotId'] = sourcedFromViabilitySnapshotId;
+    }
+    this.api.post<any>(`/quotations/${this.quotId}/viability`, body).subscribe({
       next: (res) => {
         this.busy = false;
         this.workingSheet = res.workingSheet || [];
         this.sheet = res.viability || null;
+        this.hasPoWorkingSheet = !!res.hasPoWorkingSheet;
+        this.hydrateTpCostState();
+        // New head id → reset the "currently loaded" pointer so the
+        // version picker doesn't try to highlight a stale snapshot id.
+        this.currentSnapshotId = null;
+        this.refreshSnapshotList();
         this.notify.success('Viability sheet generated.');
         this.stageChanged.emit();
       },
@@ -912,6 +1252,87 @@ export class QuotationViabilityComponent implements OnChanges {
         this.notify.error(e?.error?.detail || 'Failed to generate viability sheet.');
       },
     });
+  }
+
+  generate(): void {
+    // First-time generate: no source picker (no FWS snapshots are
+    // likely to exist yet on a quotation that's never had a viability
+    // sheet). Backend defaults to live FWS — which is the right
+    // behaviour for this path.
+    this.postGenerate(null);
+  }
+
+  /** Re-generate — opens the source picker dialog so the user can
+   *  choose which version (FWS snapshot OR past Viability snapshot)
+   *  drives the new viability. Replaces the older confirm-dialog
+   *  flow. The picker dialog contains its own affirmation, so no
+   *  separate ConfirmDialog is needed. */
+  regenerate(): void {
+    if (!this.sheet) return;
+    const cycleId = (this.sheet as any).quotOrderCycleId as number | undefined;
+    if (!cycleId) {
+      // Fallback to the legacy confirm-then-generate flow if the
+      // sheet predates the cycle model (no cycleId stamped).
+      this.legacyRegenerateConfirm();
+      return;
+    }
+    import('./generate-viability-dialog.component').then(({ GenerateViabilityDialogComponent }) => {
+      const ref = this.dialog.open(GenerateViabilityDialogComponent, {
+        data: {
+          quotId: this.quotId,
+          cycleId,
+          cycleNo: (this.sheet as any).cycleNo ?? 1,
+          // Phase B: pass the current viability head id so the dialog
+          // can also offer past Viability snapshots as a source.
+          viabilityId: this.sheet.viabilityId,
+        },
+        width: '560px',
+      });
+      ref.afterClosed().subscribe((result) => {
+        if (!result) return;
+        this.postGenerate(
+          result.sourcedFromFWSSnapshotId,
+          result.sourcedFromViabilitySnapshotId,
+        );
+      });
+    });
+  }
+
+  private legacyRegenerateConfirm(): void {
+    const ref = this.dialog.open(ConfirmDialogComponent, {
+      data: {
+        title: 'Re-generate viability?',
+        message:
+          'This archives the current Approved version and creates a fresh ' +
+          'Draft v+1 carrying every line forward (including your goal-seek ' +
+          'and TP-cost edits). The archived version stays reachable via ' +
+          'the version dropdown. Continue?',
+        confirmText: 'Re-generate',
+        confirmColor: 'primary',
+        cancelText: 'Cancel',
+      },
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (ok) this.generate();
+    });
+  }
+
+  /** Pull tpCostMode + tpCostAsOfDate from the freshly-loaded sheet so
+   *  the toggle binding reflects what's persisted. Falls back to
+   *  'as_of_date' for legacy sheets where the columns are NULL.
+   *  Tolerates the pre-rename 'approved_date' string too, mapping it
+   *  to 'po_working_sheet' (defence against a stale dev row that
+   *  didn't get hit by the rename migration). */
+  private hydrateTpCostState(): void {
+    if (!this.sheet) return;
+    const raw = this.sheet.tpCostMode;
+    this.tpCostMode = (raw === 'po_working_sheet' || raw === 'approved_date')
+      ? 'po_working_sheet'
+      : 'as_of_date';
+    const dateRaw = this.sheet.tpCostAsOfDate;
+    this.tpCostAsOfDate = dateRaw ? new Date(dateRaw) : null;
+    this.missingRateLineIds.clear();
+    this.lastRefreshSummary = null;
   }
 
   onCellChange(row: any, key: string, raw: any): void {
@@ -925,7 +1346,114 @@ export class QuotationViabilityComponent implements OnChanges {
       return;
     }
 
+    // CR #1 — when a cost-head value changes, gate the persist behind
+    // the bulk-apply modal. Header/identity fields (item, grade, dia,
+    // length, orderedQty) skip the modal — those aren't propagatable.
+    if (COST_HEADS.includes(key)) {
+      const parsed = raw === '' ? null : Number(raw);
+      const prev = row[key];
+      if (this.valuesEqual(parsed, prev)) return;
+      this.promptBulkApply(row, key, prev, parsed);
+      return;
+    }
+
     this.persistCellChange(row, key, raw);
+  }
+
+  /** Numeric equality tolerant to null/0 confusion. */
+  private valuesEqual(a: any, b: any): boolean {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return a === b;
+    return Number(a) === Number(b);
+  }
+
+  /** CR #1 — Show the bulk-apply confirmation modal. If the user
+   *  confirms, persist the source row's change first, then fan-out
+   *  PUTs to the propagation targets. If cancelled, revert local. */
+  private promptBulkApply(row: any, key: string, prev: any, newVal: any): void {
+    if (!this.sheet) return;
+    const sheet = this.sheet;
+    const otherRows = sheet.lines.filter((r: any) => r.viabilityLineId !== row.viabilityLineId);
+    const data: BulkApplyDialogData = {
+      fieldLabel: HEAD_LABEL[key] || key,
+      oldValue: prev,
+      newValue: newVal,
+      sourceRowLabel: this.rowSummary(row),
+      candidateRows: otherRows.map((r: any): BulkApplyCandidateRow => ({
+        id: r.viabilityLineId,
+        label: this.rowSummary(r),
+        currentValue: r[key] ?? null,
+      })),
+    };
+    const ref = this.dialog.open<
+      BulkApplyDialogComponent, BulkApplyDialogData, BulkApplyDialogResult
+    >(BulkApplyDialogComponent, { width: '640px', data });
+
+    ref.afterClosed().subscribe(result => {
+      if (!result || !result.confirmed) {
+        // Cancelled — revert the local ngModel so the input snaps back.
+        row[key] = prev;
+        return;
+      }
+      // Persist the source row's edit first; if that succeeds, fan-out
+      // the propagation targets. Errors on the fan-out are reported
+      // per-row but don't roll back the source.
+      this.persistCellChange(row, key, newVal, () => {
+        this.fanOutBulkApply(sheet.viabilityId, result.applyToRowIds, key, newVal);
+      });
+    });
+  }
+
+  /** One-line summary for the dialog's row list and source-row preface. */
+  private rowSummary(row: any): string {
+    const parts = [
+      row.itemName,
+      row.itemGradeName,
+      row.itemDia ? `Ø ${row.itemDia}` : '',
+      row.itemLength,
+      row.orderedQty != null ? `${row.orderedQty} MT` : '',
+    ].filter(Boolean);
+    return parts.join(' · ');
+  }
+
+  /** Apply the bulk change to N other rows. Each PUT is fire-and-forget
+   *  here; the server is the source of truth and the response patches
+   *  the local row on success. */
+  private fanOutBulkApply(
+    viabilityId: number,
+    targetRowIds: (number | string)[],
+    key: string,
+    value: any,
+  ): void {
+    if (!this.sheet || !targetRowIds.length) return;
+    const rowsById = new Map<number | string, any>();
+    for (const r of this.sheet.lines) rowsById.set(r.viabilityLineId, r);
+
+    let ok = 0;
+    let failed = 0;
+    const finish = () => {
+      if (ok + failed === targetRowIds.length) {
+        if (failed === 0) {
+          this.notify.success(`Applied to ${ok} additional line${ok === 1 ? '' : 's'}.`);
+        } else {
+          this.notify.error(`Applied to ${ok}; ${failed} failed.`);
+        }
+      }
+    };
+
+    for (const id of targetRowIds) {
+      const row = rowsById.get(id);
+      if (!row) { failed++; finish(); continue; }
+      const prev = row[key];
+      row[key] = value;  // optimistic
+      this.api.put<any>(
+        `/viability/${viabilityId}/lines/${row.viabilityLineId}`,
+        { [key]: value },
+      ).subscribe({
+        next: (updated) => { Object.assign(row, updated); ok++; finish(); },
+        error: () => { row[key] = prev; failed++; finish(); },
+      });
+    }
   }
 
   /** Common save path used by the normal cell-change flow and by the
@@ -1056,6 +1584,7 @@ export class QuotationViabilityComponent implements OnChanges {
           this.busy = false;
           this.sheet = { ...this.sheet, ...updated };
           this.notify.success('Viability sheet approved.');
+          this.refreshSnapshotList();
           this.stageChanged.emit();
         },
         error: (e) => {
@@ -1064,6 +1593,59 @@ export class QuotationViabilityComponent implements OnChanges {
         },
       });
     });
+  }
+
+  /** Called when the user picks a row in the inline version picker.
+   *  One-click switch — no confirm dialog. Auto-approves the current
+   *  live state first so nothing is lost (D3 short-circuit handles
+   *  the no-change case), then loads the picked snapshot. No-ops if
+   *  the picked row is already loaded. */
+  onVersionPicked(pickedId: number): void {
+    if (!this.sheet?.viabilityId) return;
+    if (pickedId === this.currentSnapshotId) {
+      this.notify.info('That version is already loaded in the editor.');
+      return;
+    }
+    const action = this.canApprove ? 'saveAndSwitch' : 'discardAndSwitch';
+    this.performVersionSwitch(pickedId, action);
+  }
+
+  private performVersionSwitch(pickedId: number, action: 'saveAndSwitch' | 'discardAndSwitch'): void {
+    if (!this.sheet?.viabilityId) return;
+    this.switching = true;
+    const viabilityId = this.sheet.viabilityId;
+    const doLoad = () => {
+      this.cycleService.loadViabilitySnapshot(viabilityId, pickedId).subscribe({
+        next: (res) => {
+          this.switching = false;
+          this.currentSnapshotId = pickedId;
+          this.notify.success(`Loaded ${res.restoredFromLabel} into the editor.`);
+          this.load();  // re-fetches the bundle + refreshes snapshot list
+          this.stageChanged.emit();
+        },
+        error: (e) => {
+          this.switching = false;
+          this.notify.error(
+            e?.error?.detail || e?.error?.message ||
+            'Failed to load the picked version.',
+          );
+        },
+      });
+    };
+    if (action === 'saveAndSwitch') {
+      this.api.put<any>(`/viability/${viabilityId}/approve`, {}).subscribe({
+        next: () => doLoad(),
+        error: (e) => {
+          this.switching = false;
+          this.notify.error(
+            e?.error?.detail || e?.error?.message ||
+            'Failed to save current state before switching. Aborted — your edits are still in the editor.',
+          );
+        },
+      });
+    } else {
+      doLoad();
+    }
   }
 
   /** Phase 3: viability is stale when its stamped PO version is
@@ -1100,6 +1682,160 @@ export class QuotationViabilityComponent implements OnChanges {
     });
     ref.afterClosed().subscribe(ok => {
       if (ok) this.stageChanged.emit();
+    });
+  }
+
+  /** CR #3 — preview modal for the viability sheet. Columns mirror the
+   *  visible editable grid; rows are the live (locally mutated) lines so
+   *  user-staged edits show through. Hide-blank toggle drops cost-head
+   *  columns where every line is empty / zero. */
+  // ---- TP-Cost toggle handlers ----
+
+  onTpCostModeChange(mode: 'as_of_date' | 'po_working_sheet'): void {
+    if (mode === this.tpCostMode) return;
+    if (mode === 'po_working_sheet' && !this.hasPoWorkingSheet) {
+      this.notify.error('No PO Final Working Sheet exists for this quotation yet.');
+      return;
+    }
+    this.tpCostMode = mode;
+    this.refreshTpCost();
+  }
+
+  onTpCostDateChange(value: Date | null): void {
+    this.tpCostAsOfDate = value;
+    this.refreshTpCost();
+  }
+
+  /** Fire the refresh endpoint. If any line's current TPWGST diverges
+   *  from the rate-table value at the *previous* mode/date, show a
+   *  confirm dialog listing those lines and let the user decide whether
+   *  to clobber or skip. Confirmed → second call with overwriteAll=true;
+   *  Cancelled → leave staged toggle as-is, no API call. */
+  private refreshTpCost(): void {
+    // Soft flow: removed the `sheet.status === 'Approved'` short-circuit
+    // so TP-cost refresh works post-approval too. Each refresh produces
+    // journaled post-approval edits the same way line edits do.
+    if (!this.sheet) return;
+    this.runRefreshTpCost(false).then(summary => {
+      if (!summary) return;
+      // First pass with overwriteAll=false. If any lines were skipped,
+      // surface the confirm dialog and re-issue with overwrite=true on
+      // user OK.
+      if (summary.skippedManualCount > 0) {
+        this.confirmAndOverwriteManualLines(summary);
+      }
+    });
+  }
+
+  /** Public method bound to a future "Refresh" toolbar button if needed.
+   *  Currently called internally on toggle / date change. */
+  private runRefreshTpCost(overwriteAll: boolean): Promise<any | null> {
+    if (!this.sheet) return Promise.resolve(null);
+    this.refreshingTp = true;
+    const body = {
+      mode: this.tpCostMode,
+      asOfDate: this.tpCostAsOfDate ? this.formatDate(this.tpCostAsOfDate) : null,
+      overwriteAll,
+    };
+    return new Promise(resolve => {
+      this.api.post<any>(
+        `/viability/${this.sheet.viabilityId}/refresh-tp-cost`,
+        body,
+      ).subscribe({
+        next: (res) => {
+          this.refreshingTp = false;
+          // Patch the local sheet header + per-line values from the
+          // server response so the grid re-renders without a re-GET.
+          if (res.sheet) {
+            this.sheet = { ...this.sheet, ...res.sheet };
+          }
+          if (Array.isArray(res.sheet?.lines)) {
+            this.sheet.lines = res.sheet.lines;
+          }
+          // Track missing-rate lines for the warning chip render.
+          this.missingRateLineIds = new Set(
+            (res.perLine || [])
+              .filter((p: any) => p.status === 'missing_rate')
+              .map((p: any) => p.viabilityLineId),
+          );
+          this.lastRefreshSummary = {
+            updatedCount: res.updatedCount || 0,
+            skippedManualCount: res.skippedManualCount || 0,
+            missingRateCount: res.missingRateCount || 0,
+          };
+          resolve(res);
+        },
+        error: (e) => {
+          this.refreshingTp = false;
+          this.notify.error(e?.error?.detail || 'Failed to refresh TP Cost.');
+          resolve(null);
+        },
+      });
+    });
+  }
+
+  private confirmAndOverwriteManualLines(prev: any): void {
+    const ref = this.dialog.open(ConfirmDialogComponent, {
+      width: '480px',
+      data: {
+        title: 'Overwrite manual TP-Cost edits?',
+        message:
+          `${prev.skippedManualCount} line${prev.skippedManualCount === 1 ? ' has' : 's have'} ` +
+          `a hand-edited TP Cost that differs from the rate-table value. ` +
+          `They were left unchanged. Overwrite them with the new rate now?`,
+        confirmText: 'Overwrite',
+        cancelText: 'Keep manual edits',
+        confirmColor: 'warn',
+      },
+    });
+    ref.afterClosed().subscribe(ok => {
+      if (!ok) return;
+      this.runRefreshTpCost(true);
+    });
+  }
+
+  /** Hover-tooltip for the post-refresh summary chip. */
+  lastRefreshTooltip(): string {
+    const s = this.lastRefreshSummary;
+    if (!s) return '';
+    const parts = [`Updated ${s.updatedCount}`];
+    if (s.skippedManualCount) parts.push(`Skipped ${s.skippedManualCount} manually-edited`);
+    if (s.missingRateCount) parts.push(`${s.missingRateCount} missing rate`);
+    return parts.join(' · ');
+  }
+
+  /** yyyy-MM-dd for the JSON body — avoids timezone drift the
+   *  ISO toString would introduce. */
+  private formatDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  openPreview(): void {
+    if (!this.sheet) return;
+    const visibleCols = this.visibleViabilityCols();
+    const previewColumns: SheetPreviewColumn[] = visibleCols
+      .filter(c => !c.key.startsWith('_'))
+      .map(c => ({
+        key: c.key,
+        label: c.label,
+        format: c.num ? 'number' : 'text',
+        cellClass: c.deducted ? 'neg' : (c.neg ? 'neg' : undefined),
+      }));
+    const data: SheetPreviewDialogData = {
+      title: 'Viability Sheet — Preview',
+      caption: `${this.sheet.lines.length} line${this.sheet.lines.length === 1 ? '' : 's'}`,
+      columns: previewColumns,
+      rows: this.sheet.lines,
+      hideBlankByDefault: true,
+      onExportExcel: () => this.downloadExcel(),
+    };
+    this.dialog.open(SheetPreviewDialogComponent, {
+      width: 'auto',
+      maxWidth: '95vw',
+      data,
     });
   }
 

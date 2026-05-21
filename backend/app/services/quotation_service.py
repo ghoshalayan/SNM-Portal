@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -18,6 +19,37 @@ COST_HEAD_COLS = [
     "ShortLnthCharge", "SpeciFicLnthCharge", "ExtraCharge", "Fluctuation",
     "Commission", "Misc", "Testing", "MOUTOD", "SplDisc", "JC",
 ]
+
+# Cost heads stored as positive values but treated as DEDUCTIONS when
+# computing totRate. Users enter discount amounts as positive numbers
+# (CR #2); the math here subtracts them. Keep in sync with the frontend
+# DEDUCTED_COST_HEADS constant in quotation-detail-dialog.component.ts.
+DEDUCTED_COST_HEADS = frozenset({"CD", "SplDisc"})
+
+
+def sum_cost_heads(source):
+    """Sum cost-head values, subtracting the deducted heads (CD, SplDisc).
+    Accepts an ORM object (uses ``getattr``) or a dict (uses ``.get``).
+    Returns Decimal when any input value is a Decimal, otherwise float.
+    Returns 0 / Decimal("0") if all values are None.
+    """
+    use_decimal = None
+    total_dec = Decimal("0")
+    total_flt = 0.0
+    for col in COST_HEAD_COLS:
+        v = source.get(col) if isinstance(source, dict) else getattr(source, col, None)
+        if v is None:
+            continue
+        # First non-None value decides the numeric type for the running sum.
+        if use_decimal is None:
+            use_decimal = isinstance(v, Decimal)
+        if use_decimal:
+            coerced = v if isinstance(v, Decimal) else Decimal(str(v))
+            total_dec += -coerced if col in DEDUCTED_COST_HEADS else coerced
+        else:
+            coerced = float(v)
+            total_flt += -coerced if col in DEDUCTED_COST_HEADS else coerced
+    return total_dec if use_decimal else total_flt
 
 # All detail columns to copy (item info + cost heads + calculated)
 DETAIL_COPY_COLS = [

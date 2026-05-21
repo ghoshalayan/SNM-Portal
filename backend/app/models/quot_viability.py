@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Date, ForeignKey
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from app.models.base import AuditMixin
@@ -10,6 +10,14 @@ class QuotViabilitySheet(Base, AuditMixin):
     viabilityId = Column(Integer, primary_key=True, autoincrement=True)
     companyId = Column(Integer, ForeignKey("Company.companyId"), nullable=False)
     quotId = Column(Integer, ForeignKey("QuotSummary.quotId"), nullable=False)
+    # LOI/Cycle CR — cycle grouping. Per-cycle scoping for WS / Viability /
+    # Annexure was locked in the CR (C2). Nullable initially; backfill
+    # flips to NOT NULL in the same migration.
+    quotOrderCycleId = Column(
+        Integer,
+        ForeignKey("QuotOrderCycle.quotOrderCycleId"),
+        nullable=True,
+    )
     status = Column(String(20), default="Draft", nullable=False)
     approvedby = Column(Integer, ForeignKey("UserMaster.userId"), nullable=True)
     approvedon = Column(DateTime, nullable=True)
@@ -20,6 +28,17 @@ class QuotViabilitySheet(Base, AuditMixin):
     versionNo = Column(Integer, default=1, nullable=False)
     # Phase 3 source-version pointer.
     sourcedFromPOVersion = Column(Integer, nullable=True)
+
+    # TP-Cost sourcing mode — drives where per-line TPWGST is pulled from
+    # when the user clicks "Refresh TP Cost" or generates the sheet.
+    #   'as_of_date' (default): use the rate effective on tpCostAsOfDate
+    #                            (NULL = today).
+    #   'approved_date'        : use the rate effective on the parent
+    #                            quotation's approvedon date.
+    # Persisted so reopening the sheet shows the same toggle position the
+    # user last set.
+    tpCostMode = Column(String(20), nullable=True)  # 'as_of_date' | 'approved_date'
+    tpCostAsOfDate = Column(Date, nullable=True)
 
     quotation = relationship("QuotSummary", foreign_keys=[quotId])
     approved_by_user = relationship("User", foreign_keys=[approvedby])

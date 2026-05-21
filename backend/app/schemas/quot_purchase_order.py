@@ -9,8 +9,14 @@ class QuotPurchaseOrderBody(BaseModel):
     ``PUT /quotations/{id}/mature`` endpoint accepts this body to create
     the PO atomically with the status transition; the dedicated
     ``PUT /quotations/{id}/purchase-order`` accepts the same body for
-    edits-while-Matured."""
-    poNo: str
+    edits-while-Matured.
+
+    LOI capture (Convert-as-LOI): when ``isLOI = True``, ``poNo`` may be
+    blank — the service auto-generates one in the form ``LOI-{quotId}-
+    {seq}``. ``poDate`` doubles as the LOI date. ``loiText`` is an
+    optional free-text body for the LOI's intent / scope language.
+    """
+    poNo: Optional[str] = None
     poDate: date
     customerId: int
     customerContactId: Optional[int] = None
@@ -19,6 +25,20 @@ class QuotPurchaseOrderBody(BaseModel):
     consigneeSiteId: Optional[int] = None
     consigneeAddressManual: Optional[str] = None
     remarks: Optional[str] = None
+    # LOI-specific (only meaningful when isLOI=True; ignored otherwise).
+    isLOI: bool = False
+    loiText: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_po_no_for_formal_po(self):
+        """A formal PO MUST carry an externally-supplied poNo — that's
+        the customer's reference and the only way to match invoices
+        later. LOIs may omit it (server auto-generates). Validates
+        post-construction so the field-level Optional doesn't slide
+        a missing poNo through for ``isLOI=False``."""
+        if not self.isLOI and not (self.poNo and self.poNo.strip()):
+            raise ValueError("poNo is required when capturing a formal PO.")
+        return self
 
 
 def _site_label(site: Any) -> Optional[str]:
@@ -55,6 +75,10 @@ class QuotPurchaseOrderResponse(BaseModel):
     consigneeSiteId: Optional[int] = None
     consigneeAddressManual: Optional[str] = None
     remarks: Optional[str] = None
+    # LOI-specific (Convert-as-LOI). Mirrors the body fields so the
+    # frontend can render the LOI text + flag without an extra fetch.
+    isLOI: bool = False
+    loiText: Optional[str] = None
     isActive: bool
     createdby: Optional[int] = None
     createdon: Optional[datetime] = None
@@ -100,7 +124,7 @@ class QuotPurchaseOrderResponse(BaseModel):
                     "customerId", "customerContactId",
                     "billingSiteId", "billingAddressManual",
                     "consigneeSiteId", "consigneeAddressManual",
-                    "remarks", "isActive",
+                    "remarks", "isLOI", "loiText", "isActive",
                     "createdby", "createdon", "lastupdateby", "lastupdateon",
                 )
             },

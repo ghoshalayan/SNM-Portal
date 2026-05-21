@@ -55,14 +55,10 @@ def get_latest_tp_costs(db: Session, company_id: int) -> dict:
 
 
 def _recalc_quot_detail(dtl):
-    """Recalculate totRate, GST, totAmount for a QuotDetails row."""
-    cost_heads = [
-        "TPWGST", "Marketing", "FreightTrailer", "FreightTruck", "Unloading",
-        "OHD", "IFC", "WeighmentDiff", "CD", "SWECharge", "CRS", "IncCharge",
-        "ShortLnthCharge", "SpeciFicLnthCharge", "ExtraCharge", "Fluctuation",
-        "Commission", "Misc", "Testing", "MOUTOD", "SplDisc", "JC",
-    ]
-    total = sum(float(getattr(dtl, h, 0) or 0) for h in cost_heads)
+    """Recalculate totRate, GST, totAmount for a QuotDetails row.
+    CD + SplDisc are deducted (CR #2)."""
+    from app.services.quotation_service import sum_cost_heads
+    total = float(sum_cost_heads(dtl))
     dtl.totRate = round(total, 2)
     gst = round(total * 0.18, 2)
     if dtl.gstMode == "CGST_SGST":

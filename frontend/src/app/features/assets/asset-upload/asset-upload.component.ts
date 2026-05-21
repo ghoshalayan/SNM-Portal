@@ -10,6 +10,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
+import { MatTooltipModule } from '@angular/material/tooltip';
 import { environment } from '../../../../environments/environment';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ConfirmDialogComponent } from '../../../shared/components/confirm-dialog/confirm-dialog.component';
@@ -34,6 +35,7 @@ interface Asset {
   imports: [
     CommonModule, FormsModule, MatTableModule, MatButtonModule, MatIconModule,
     MatCardModule, MatProgressBarModule, MatDialogModule, MatFormFieldModule, MatInputModule,
+    MatTooltipModule,
   ],
   template: `
     <mat-card>
@@ -91,7 +93,9 @@ interface Asset {
                 <button mat-icon-button color="primary" (click)="download(row)" matTooltip="Download">
                   <mat-icon>download</mat-icon>
                 </button>
-                <button mat-icon-button color="warn" (click)="deleteAsset(row)" matTooltip="Delete">
+                <button mat-icon-button color="warn" (click)="deleteAsset(row)"
+                        [disabled]="disabled"
+                        [matTooltip]="disabled ? 'Locked — PO is no longer in Draft' : 'Delete'">
                   <mat-icon>delete</mat-icon>
                 </button>
               </td>
@@ -123,6 +127,12 @@ interface Asset {
 export class AssetUploadComponent implements OnInit, OnChanges {
   @Input() enqid?: number;
   @Input() quotId?: number;
+
+  /** Per-PO/LOI scoping (LOI/Cycle CR follow-up). When set, the list
+   *  filter narrows to assets attached to this PO row, AND every new
+   *  upload writes ``quotPOId`` so the file hangs off that PO. NULL /
+   *  undefined keeps the legacy quotation-level behaviour. */
+  @Input() quotPOId?: number;
 
   /** Asset category stored on each row + used as list filter. */
   @Input() category?: string;
@@ -179,6 +189,11 @@ export class AssetUploadComponent implements OnInit, OnChanges {
     const params: any = {};
     if (this.enqid) params.enqid = this.enqid;
     if (this.quotId) params.quotId = this.quotId;
+    // Pass quotPOId through when set so the backend narrows to this PO's
+    // attachments. Numeric 0 is reserved by the backend for "show only
+    // quotation-scoped" — currently unused here but documented for
+    // future callers.
+    if (this.quotPOId != null) params.quotPOId = this.quotPOId;
     if (this.category) params.category = this.category;
     this.api.get<{ items: Asset[] }>('/assets', { ...params, pageSize: '100' }).subscribe({
       next: res => {
@@ -190,12 +205,22 @@ export class AssetUploadComponent implements OnInit, OnChanges {
 
   onDragOver(event: DragEvent): void {
     event.preventDefault();
+    // Don't show the drop-target highlight when uploads are locked —
+    // and prevent the browser from showing the "copy" cursor either.
+    if (this.disabled) {
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      return;
+    }
     this.isDragOver = true;
   }
 
   onDrop(event: DragEvent): void {
     event.preventDefault();
     this.isDragOver = false;
+    // Hard gate on the disabled flag — without this, drag-and-drop
+    // bypassed the Browse-button disable and silently uploaded files
+    // to a locked PO row.
+    if (this.disabled) return;
     if (event.dataTransfer?.files) {
       this.uploadFiles(event.dataTransfer.files);
     }
@@ -258,6 +283,7 @@ export class AssetUploadComponent implements OnInit, OnChanges {
       }
       if (this.enqid) formData.append('enqid', this.enqid.toString());
       if (this.quotId) formData.append('quotId', this.quotId.toString());
+      if (this.quotPOId != null) formData.append('quotPOId', this.quotPOId.toString());
       if (this.category) formData.append('category', this.category);
 
       this.http.post(`${environment.apiUrl}/assets/upload`, formData).subscribe({

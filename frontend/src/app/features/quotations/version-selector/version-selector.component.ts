@@ -70,7 +70,12 @@ interface StageVersion {
       } @else {
         <div class="ver-list">
           @for (v of versions; track v.entityId) {
-            <div class="ver-row" [class.is-head]="v.isHead">
+            <div class="ver-row" [class.is-head]="v.isHead"
+                 [class.is-clickable]="true"
+                 (click)="onRowClick(v); $event.stopPropagation()"
+                 [matTooltip]="v.isHead
+                   ? 'Already the head — already displayed.'
+                   : 'Click to load this version (read-only).'">
               <div class="ver-row-main">
                 <div class="ver-row-title">
                   <span class="ver-no">v{{ v.versionNo }}</span>
@@ -153,6 +158,10 @@ interface StageVersion {
       border-bottom: 1px solid rgba(0,0,0,0.05);
     }
     .ver-row.is-head { background: rgba(58, 107, 181, 0.05); }
+    .ver-row.is-clickable:not(.is-head) { cursor: pointer; }
+    .ver-row.is-clickable:not(.is-head):hover {
+      background: rgba(58, 107, 181, 0.07);
+    }
     .ver-row:last-child { border-bottom: 0; }
     .ver-row-main { flex: 1; min-width: 0; }
     .ver-row-title {
@@ -220,6 +229,14 @@ export class VersionSelectorComponent {
    *  underlying entity since the head row has changed. */
   @Output() restored = new EventEmitter<void>();
 
+  /** Emitted when the user clicks a non-head version row. Parent
+   *  decides what to do — typically open the row in a read-only
+   *  preview pane (the deeper per-stage time-travel UX) or pre-
+   *  select the version in another picker (e.g. annexure's source-
+   *  viability dropdown). Head clicks are no-ops since the page is
+   *  already displaying the head. */
+  @Output() versionSelected = new EventEmitter<number>();
+
   versions: StageVersion[] = [];
   loading = false;
   /** entityId of the row currently being restored (for the inline
@@ -258,6 +275,15 @@ export class VersionSelectorComponent {
         this.loading = false;
       },
     });
+  }
+
+  /** Fired when the user clicks anywhere on a version row (not the
+   *  Restore button — that has its own handler with stopPropagation).
+   *  Head clicks are no-ops; non-head clicks emit ``versionSelected``
+   *  so the parent can react (load preview, pre-select a picker, etc.). */
+  onRowClick(version: StageVersion): void {
+    if (version.isHead) return;
+    this.versionSelected.emit(version.entityId);
   }
 
   confirmRestore(version: StageVersion): void {

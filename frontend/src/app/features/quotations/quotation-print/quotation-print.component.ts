@@ -69,8 +69,14 @@ export interface PrintQuotation {
 export interface PrintDetail {
   itemName?: string;
   itemGradeName: string;
-  itemDia: number;
-  itemLength: number;
+  // Alphanumeric in the DB (``String(50)``) and treated as a string key
+  // everywhere else in the app — TP-cost lookups, master CRUD, enquiry
+  // details, costing service. The print component used to lie and call
+  // these ``number``, which caused ``formatDimension`` to coerce them
+  // through ``Number(...)`` and render the literal string ``"NaN"`` for
+  // any non-numeric value (including empty string).
+  itemDia: string | null;
+  itemLength: string | null;
   itemUnit: string;
   quantity: number;
   basicRate: number;
@@ -633,8 +639,24 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
   }
 
   /** Format a dimension value (Dia, Length). */
-  formatDimension(value: number | null | undefined): string {
-    return formatPrintNumber(value, this.printStyle.dimensionDecimals, this.printStyle.roundingMode);
+  /** Dia and length are alphanumeric (``String(50)`` in the DB; values
+   *  like "16", "16mm", "T16", "12 MTRS", "Specified"). Old behaviour
+   *  pushed them through ``formatPrintNumber``, which silently produced
+   *  the literal string ``"NaN"`` for anything non-numeric (including
+   *  empty string). Now: pass through as a string, no formatting.
+   *  ``dimensionDecimals`` and the rounding mode are no longer
+   *  consulted for these columns (the knob is hidden in the format
+   *  dialog but kept in saved settings for back-compat).
+   *
+   *  Escaping is NOT done here because this same helper is invoked from
+   *  Angular interpolation (``{{ formatDimension(item.itemDia) }}``)
+   *  which auto-escapes — double-escaping would surface raw entities.
+   *  The raw-HTML path in ``buildLineItemsHtml`` wraps the call with
+   *  ``escapeHtml`` explicitly.
+   */
+  formatDimension(value: string | number | null | undefined): string {
+    if (value == null) return '';
+    return `${value}`;
   }
 
   constructor(
@@ -909,8 +931,8 @@ export class QuotationPrintComponent implements OnInit, OnDestroy {
         <td style="${td}${bg}${bA('sno')}">${i + 1}</td>
         <td style="${td}${bg}${bA('itemName')}">${this.escapeHtml(d.itemName || '')}</td>
         <td style="${td}${bg}${bA('grade')}">${this.escapeHtml(d.itemGradeName || '')}</td>
-        <td style="${td}${bg}${bA('dia')}">${this.formatDimension(d.itemDia)}</td>
-        <td style="${td}${bg}${bA('length')}">${this.formatDimension(d.itemLength)}</td>
+        <td style="${td}${bg}${bA('dia')}">${this.escapeHtml(this.formatDimension(d.itemDia))}</td>
+        <td style="${td}${bg}${bA('length')}">${this.escapeHtml(this.formatDimension(d.itemLength))}</td>
         <td style="${td}${bg}${bA('unit')}">${this.escapeHtml(d.itemUnit || '')}</td>
         <td style="${td}${bg}${bA('qty')}">${this.formatQty(d.quantity)}</td>
         <td style="${td}${bg}${bA('basicRate')}">${this.formatAmount(d.totRate)}</td>

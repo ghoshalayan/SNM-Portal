@@ -32,8 +32,10 @@ COST_HEADS = [
 
 
 def _recalc(dtl):
-    """Recalculate totRate/GST/totAmount for a QuotDetails row."""
-    total = sum(float(getattr(dtl, h, 0) or 0) for h in COST_HEADS)
+    """Recalculate totRate/GST/totAmount for a QuotDetails row.
+    CD + SplDisc are deducted (CR #2)."""
+    from app.services.quotation_service import sum_cost_heads
+    total = float(sum_cost_heads(dtl))
     dtl.totRate = round(total, 2)
     gst = round(total * 0.18, 2)
     if dtl.gstMode == "CGST_SGST":

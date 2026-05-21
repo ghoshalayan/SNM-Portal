@@ -4,6 +4,13 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.api.v1.router import api_router
+from app.core.error_handler import (
+    RequestIdMiddleware,
+    StarletteHTTPException,
+    http_exception_handler,
+    unhandled_exception_handler,
+)
+from app.core.logging_config import configure_logging
 from app.core.slow_query_middleware import SlowQueryMiddleware
 from app.core.database import engine, SessionLocal
 from app.core.dependencies import get_current_user
@@ -11,6 +18,10 @@ from kpi_studio import KpiStudioConfig, create_router as create_kpi_router
 
 
 def create_app() -> FastAPI:
+    # Initialise structured logging once at app boot. Idempotent — if
+    # uvicorn is configured separately the handler list stays clean.
+    configure_logging()
+
     # Gate OpenAPI docs behind DEBUG so production doesn't expose the schema /
     # verbose traceback surface to the public internet.
     app = FastAPI(
@@ -21,6 +32,18 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if settings.DEBUG else None,
         redirect_slashes=False,
     )
+
+    # Phase 0 error boundary — every request gets a UUID, every error
+    # response gets a uniform { code, message, requestId } JSON shape,
+    # every unhandled exception lands in the structured log with
+    # request context for triage.
+    #
+    # Order matters: RequestIdMiddleware must wrap the others so the
+    # request_id is on the request state before any later middleware /
+    # handler reads it.
+    app.add_middleware(RequestIdMiddleware)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
 
     # CORS — pull origins from settings (CORS_ORIGINS env var, comma-separated).
     # `allow_origins=["*"]` is incompatible with `allow_credentials=True` per
