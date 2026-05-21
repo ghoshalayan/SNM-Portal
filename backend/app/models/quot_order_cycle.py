@@ -47,6 +47,16 @@ class QuotOrderCycle(Base, AuditMixin):
         nullable=True,
     )
 
+    # FWS lifecycle state. Independent of the cycle's overall ``status``:
+    #   ``draft``    → live FWS rows are editable; Approve is the next CTA.
+    #   ``approved`` → live FWS matches the latest snapshot; line CRUD is
+    #                  rejected (409). Re-generate flips this back to
+    #                  ``draft`` so the user can iterate.
+    # Added 2026-05-21 to give Final Working Sheet the same lifecycle
+    # discipline as Viability + Annexure (both of which already have a
+    # ``status`` column on their head row).
+    fwsStatus = Column(String(20), default="draft", nullable=False)
+
     startedOn = Column(DateTime, nullable=False)
     startedBy = Column(
         Integer, ForeignKey("UserMaster.userId"), nullable=False,

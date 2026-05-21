@@ -103,18 +103,22 @@ def _get_line_or_404(
 
 
 def _ensure_editable(sheet: QuotViabilitySheet) -> None:
-    """Soft-flow: this used to raise 400 when the sheet was Approved.
-    Now it's a no-op — the row stays editable post-approval. Callers
-    still invoke it as the explicit "editability check" point so that
-    if we ever need to re-introduce a guard (e.g. a hard-freeze after
-    cycle close), there's one obvious place to do it.
+    """Block line CRUD on an Approved viability sheet.
 
-    Post-approval edits are journaled by :func:`_log_post_approval_edit`
-    so the audit trail clearly records that the user touched a row
-    that had already been signed off — the trade-off the soft-flow
-    design accepted in place of locking.
+    2026-05-21 lifecycle rework: Viability follows the same
+    Draft→Approve→Approved→Re-generate→Draft pattern as FWS now does.
+    Once the sheet is Approved, line edits are rejected with 400 until
+    the user clicks Re-generate (which archives the head and creates
+    a fresh Draft from a picked source).
     """
-    return None
+    if sheet.status == "Approved":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Viability sheet is locked — it was Approved. Click "
+                "Re-generate to create a fresh editable draft."
+            ),
+        )
 
 
 def _log_post_approval_edit(

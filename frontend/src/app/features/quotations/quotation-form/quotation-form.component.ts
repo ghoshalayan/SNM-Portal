@@ -546,6 +546,18 @@ export interface VersionEntry {
                   (primaryClick)="approveFws()"
                   (versionPicked)="onFwsVersionPicked($event)">
 
+                  <div *ngIf="purchaseOrder && activeCycleSelected" class="fws-toolbar">
+                    <button mat-stroked-button color="primary"
+                            (click)="regenerateFws()"
+                            [disabled]="fwsApproving || fwsSwitching || fwsRegenerating"
+                            matTooltip="Re-generate the cycle's Final Working Sheet from a past FWS version, quotation lines, or a parent cycle. Unlocks the editor.">
+                      <mat-icon>refresh</mat-icon> Re-generate FWS
+                    </button>
+                    <span *ngIf="isFwsApprovedLock" class="fws-lock-hint">
+                      <mat-icon class="fws-lock-icon">lock</mat-icon>
+                      Editor locked after Approve — Re-generate to start a fresh draft
+                    </span>
+                  </div>
                   <app-quotation-details #fwsGrid
                     *ngIf="purchaseOrder"
                     mode="po"
@@ -987,6 +999,23 @@ export interface VersionEntry {
     }
     .fws-approve-bar button mat-icon { margin-right: 4px; }
     .fws-actions { display: flex; gap: 8px; align-items: center; }
+    .fws-toolbar {
+      display: flex; gap: 8px; align-items: center;
+      padding: 8px 0 4px;
+      border-bottom: 1px dashed var(--snm-border-divider);
+      margin-bottom: 8px;
+    }
+    .fws-toolbar button mat-icon { margin-right: 4px; }
+    .fws-lock-hint {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px;
+      color: var(--snm-text-muted);
+      font-style: italic;
+    }
+    .fws-lock-icon {
+      font-size: 16px; width: 16px; height: 16px;
+      color: var(--snm-text-muted);
+    }
     @media (max-width: 768px) {
       .fws-approve-bar {
         flex-direction: column;
@@ -1283,6 +1312,8 @@ export class QuotationFormComponent implements OnInit {
   /** True while a version-switch round-trip is in flight (load, or
    *  save-then-load). Disables both Approve and Switch buttons. */
   fwsSwitching = false;
+  /** True while POST /fws/regenerate is in flight. */
+  fwsRegenerating = false;
   /** Snapshot id the FWS editor was last loaded from. Used by the
    *  switch dialog to highlight the current row and disable
    *  switching-to-yourself. Initial value = the latest approved
@@ -1339,13 +1370,21 @@ export class QuotationFormComponent implements OnInit {
     return 'Approve again to capture the latest edits as a new version, or move on to Viability';
   }
   /** Primary CTA descriptor for the FWS shell. ``null`` hides the
-   *  button (e.g. when the user lacks ``canApprove``). */
+   *  button — happens when (a) no PO yet, (b) user lacks
+   *  ``canApprove``, (c) cycle isn't Active, or (d) FWS is already
+   *  Approved (Re-generate is the path back to editable). The
+   *  "Re-approve" label is gone: once locked, the user clicks
+   *  Re-generate to unlock + edit + Approve. */
   get fwsShellCta(): StagePrimaryCta | null {
     if (!this.purchaseOrder) return null;
     if (!this.canApprove || !this.activeCycleSelected) return null;
+    const cycle = this.cycles.find(
+      c => c.quotOrderCycleId === this.selectedCycleId,
+    );
+    if (cycle && cycle.fwsStatus === 'approved') return null;
     return {
       label: this.fwsApprovedCount > 0
-        ? 'Re-approve FWS'
+        ? 'Approve FWS'
         : 'Approve FWS & Continue to Viability',
       icon: 'verified',
       disabled: false,
@@ -1890,13 +1929,28 @@ export class QuotationFormComponent implements OnInit {
     return this.fwsApprovedCount > 0;
   }
 
-  /** Soft-flow: the Final Working Sheet stays editable as long as the
-   *  cycle is Active. Each Approve click snapshots the current state
-   *  as a new version (D3 short-circuit for unchanged content); edits
-   *  after an approve don't touch past snapshots and are folded into
-   *  the next version on the next Approve. */
+  /** Final Working Sheet is editable while the cycle is Active AND
+   *  its ``fwsStatus`` is 'draft'. Approve flips fwsStatus to
+   *  'approved' (locks the grid + line CRUD); Re-generate creates a
+   *  fresh draft from a picked source and flips back to 'draft'.
+   *  Mirrors the Draft→Approve→Re-generate lifecycle Viability and
+   *  Annexure follow. */
   get canEditFinalWorkingSheet(): boolean {
-    return this.activeCycleSelected;
+    if (!this.activeCycleSelected) return false;
+    const cycle = this.cycles.find(
+      c => c.quotOrderCycleId === this.selectedCycleId,
+    );
+    return !cycle || cycle.fwsStatus !== 'approved';
+  }
+
+  /** True when the current cycle's FWS has been Approved and is
+   *  therefore locked. Drives the small "Editor locked" hint next to
+   *  the Re-generate button. */
+  get isFwsApprovedLock(): boolean {
+    const cycle = this.cycles.find(
+      c => c.quotOrderCycleId === this.selectedCycleId,
+    );
+    return !!cycle && cycle.fwsStatus === 'approved';
   }
 
   /** PO Attachments stay open through every downstream stage so the
@@ -1925,12 +1979,10 @@ export class QuotationFormComponent implements OnInit {
    *  (Phase 4 — read the per-stage status directly instead of the
    *  collapsed legacy strings). */
   get viabilityReadOnly(): boolean {
-    // Soft-flow: the downstream stage (annexure) existing must NOT
-    // lock the upstream viability. Edits stay allowed throughout the
-    // cycle; each Approve creates the next version, each Re-generate
-    // forks a new draft. The only true lock is when the quotation
-    // itself is Revised (entire workspace frozen).
-    return this.isLocked;
+    // 2026-05-21 lifecycle rework: Approved viability is locked.
+    // Re-generate is the explicit unlock path. Plus the universal
+    // Revised-quotation hard freeze.
+    return this.isLocked || this.viabilityStatus === 'Approved';
   }
 
   /** Open the PO-capture dialog (Approved → Matured). The dialog owns
@@ -2085,6 +2137,20 @@ export class QuotationFormComponent implements OnInit {
     // panels so they show data scoped to the selected cycle.
   }
 
+  /** Re-fetch the full cycle list from the backend. Call after any
+   *  state-changing FWS action (Approve / Re-generate / Switch) so the
+   *  parent's ``cycles`` cache picks up the new ``fwsStatus`` and
+   *  the editor's lock-after-approve gate stays in sync. */
+  private refreshCycles(): void {
+    if (!this.quotationId) return;
+    this.cycleService.list(this.quotationId).subscribe({
+      next: (res) => {
+        this.cycles = res?.cycles || [];
+      },
+      error: () => {/* keep stale cycles — better than wiping the strip */},
+    });
+  }
+
   /** Refresh the cached FWS approval state for the currently selected
    *  cycle. Drives the Viability gate, the "Last approved" badge on
    *  the FWS tab, the Approve / Re-approve button label flip, AND
@@ -2195,6 +2261,11 @@ export class QuotationFormComponent implements OnInit {
               );
             }
             this.loadFwsApprovalState();
+            // Backend just flipped cycle.fwsStatus → 'approved'.
+            // Refresh cycles so the FE's lock-after-approve gate
+            // (canEditFinalWorkingSheet, isFwsApprovedLock) sees the
+            // new state immediately.
+            this.refreshCycles();
           },
           error: (e) => {
             this.fwsApproving = false;
@@ -2205,6 +2276,97 @@ export class QuotationFormComponent implements OnInit {
           },
         });
     });
+  }
+
+  /** Open the FWS Re-generate dialog. On confirm POSTs to
+   *  ``/cycles/{id}/fws/regenerate`` with the picked source, then
+   *  refreshes the grid + snapshot state. Mirrors the Viability
+   *  Re-generate flow so the three soft-flow stages stay
+   *  consistent. */
+  regenerateFws(): void {
+    if (!this.quotationId || !this.selectedCycleId) return;
+    if (!this.activeCycleSelected) {
+      this.notificationService.info(
+        'Re-generate is only available while the cycle is Active.',
+      );
+      return;
+    }
+    const currentCycle = this.cycles.find(
+      c => c.quotOrderCycleId === this.selectedCycleId,
+    );
+    const parentCycleId = currentCycle?.parentCycleId ?? null;
+    const parentCycle = parentCycleId
+      ? this.cycles.find(c => c.quotOrderCycleId === parentCycleId)
+      : null;
+    const parentCycleLabel = parentCycle
+      ? `Cycle ${parentCycle.cycleNo} — Live FWS`
+      : null;
+
+    import('./generate-fws-dialog.component').then(m => {
+      const ref = this.dialog.open(m.GenerateFwsDialogComponent, {
+        data: {
+          quotId: this.quotationId!,
+          cycleId: this.selectedCycleId!,
+          cycleNo: this.selectedCycleNo ?? 1,
+          parentCycleId,
+          parentCycleLabel,
+        },
+        width: '620px',
+        maxHeight: '90vh',
+      });
+      ref.afterClosed().subscribe(result => {
+        if (!result) return;
+        this.performFwsRegenerate(result);
+      });
+    });
+  }
+
+  private performFwsRegenerate(
+    result: {
+      sourcedFromSnapshotId: number | null;
+      fromQuotation: boolean;
+      parentCycleId: number | null;
+    },
+  ): void {
+    if (!this.quotationId || !this.selectedCycleId) return;
+    this.fwsRegenerating = true;
+    const body: {
+      sourcedFromSnapshotId?: number | null;
+      fromQuotation?: boolean;
+      parentCycleId?: number | null;
+    } = {};
+    if (result.sourcedFromSnapshotId != null) {
+      body.sourcedFromSnapshotId = result.sourcedFromSnapshotId;
+    } else if (result.fromQuotation) {
+      body.fromQuotation = true;
+    } else if (result.parentCycleId != null) {
+      body.parentCycleId = result.parentCycleId;
+    }
+    this.cycleService
+      .regenerateFws(this.quotationId, this.selectedCycleId, body)
+      .subscribe({
+        next: (res) => {
+          this.fwsRegenerating = false;
+          this.notificationService.success(
+            `Final Working Sheet re-generated — ${res.inserted} row(s) inserted.`,
+          );
+          if (this.fwsGrid) {
+            this.fwsGrid.loadDetails();
+          } else {
+            this.loadQuotation(this.quotationId!);
+          }
+          this.loadFwsApprovalState();
+          // Backend flipped cycle.fwsStatus → 'draft' on regenerate.
+          this.refreshCycles();
+        },
+        error: (e) => {
+          this.fwsRegenerating = false;
+          this.notificationService.error(
+            e?.error?.detail || e?.error?.message ||
+            'Failed to re-generate the Final Working Sheet.',
+          );
+        },
+      });
   }
 
   /** Called when the user picks a row in the inline version picker.
@@ -2252,6 +2414,9 @@ export class QuotationFormComponent implements OnInit {
             this.notificationService.success(
               `Loaded ${res.restoredFromLabel} into the editor.`,
             );
+            // Restore flipped cycle.fwsStatus → 'draft' on the
+            // backend; refresh so the lock state unwinds on the FE.
+            this.refreshCycles();
             // Two-layer refresh so the grid always reflects the new
             // state: (1) imperative call into the grid's own loader
             // when the ViewChild is resolved, (2) a wholesale

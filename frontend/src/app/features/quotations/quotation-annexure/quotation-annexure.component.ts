@@ -132,10 +132,13 @@ export interface Annexure {
             <button mat-stroked-button (click)="openPrint()">
               <mat-icon>print</mat-icon> Print
             </button>
-            @if (!isLocked) {
+            <!-- Re-generate is visible even when locked since it is
+                 the explicit unlock path. The parent-supplied readOnly
+                 input (Revised-quotation hard freeze) still suppresses it. -->
+            @if (!readOnly) {
               <button mat-stroked-button (click)="resource()"
                       [disabled]="saving || switching"
-                      matTooltip="Re-generate the annexure header + diawise from a different Viability version or PO/LOI. Your edited body fields stay intact.">
+                      matTooltip="Re-generate the annexure from a different Viability version or PO/LOI. Unlocks the editor and creates a fresh Draft.">
                 <mat-icon>refresh</mat-icon> Re-generate
               </button>
             }
@@ -669,13 +672,12 @@ export class QuotationAnnexureComponent implements OnChanges {
   refilling = false;
 
   get isLocked(): boolean {
-    // Soft flow (SF5): the only thing that locks the annexure form is
-    // the parent component asking for read-only context (e.g. when
-    // viewing from a list view, or in a printable preview). The
-    // previous Approved-status lock has been retired — edits to an
-    // Approved annexure are allowed and journaled as post-approval
-    // changes; the approval snapshot preserves the signed-off state.
-    return !!this.readOnly;
+    // 2026-05-21 lifecycle rework: Approved annexure is locked.
+    // Re-generate is the explicit unlock path (archives the head's
+    // content into a snapshot and creates a fresh Draft from a
+    // picked Viability + PO source). The parent-supplied
+    // ``readOnly`` (Revised quotation hard freeze) still wins too.
+    return !!this.readOnly || this.annexure?.status === 'Approved';
   }
 
   constructor(

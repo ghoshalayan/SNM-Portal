@@ -10,6 +10,9 @@ export interface OrderCycle {
   quotId: number;
   cycleNo: number;
   status: 'Active' | 'Complete' | 'Abandoned';
+  /** FWS lifecycle state on this cycle. ``draft`` → editable;
+   *  ``approved`` → locked, Re-generate is the unlock path. */
+  fwsStatus: 'draft' | 'approved';
   parentCycleId: number | null;
   startedOn: string;
   startedBy: number;
@@ -259,6 +262,25 @@ export class CycleService {
     return this.api.post(
       `/quotations/${quotId}/cycles/${cycleId}/fws/approval-snapshots/${snapshotId}/restore`,
       {},
+    );
+  }
+
+  /** Re-generate the cycle's FWS from a picked source — mirrors the
+   *  Viability Re-generate UX. Backend accepts exactly one source:
+   *  ``sourcedFromSnapshotId`` (past FWS snapshot in this cycle),
+   *  ``fromQuotation`` (re-clone from QuotDetails), or
+   *  ``parentCycleId`` (clone forward from a prior cycle's live FWS). */
+  regenerateFws(
+    quotId: number, cycleId: number,
+    body: {
+      sourcedFromSnapshotId?: number | null;
+      fromQuotation?: boolean;
+      parentCycleId?: number | null;
+    },
+  ): Observable<{ inserted: number }> {
+    return this.api.post<{ inserted: number }>(
+      `/quotations/${quotId}/cycles/${cycleId}/fws/regenerate`,
+      body,
     );
   }
 

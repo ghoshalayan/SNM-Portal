@@ -20,6 +20,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_db
@@ -365,6 +366,137 @@ def append_purchase_order(
         log_failure(
             db, quot_id=quot_id, company_id=ctx.company_id,
             action="Cycle Append PO", user_id=ctx.user_id, exc=e,
+        )
+        raise
+
+
+class RegenerateFwsBody(BaseModel):
+    """Source pick for FWS Re-generate. Exactly one of the three
+    fields must be set:
+
+    * ``sourcedFromSnapshotId`` — restore a past FWS approval snapshot
+      in this cycle's chain.
+    * ``fromQuotation`` — re-clone fresh from the quotation's current
+      ``QuotDetails`` rows.
+    * ``parentCycleId`` — clone forward from the parent cycle's live
+      FWS (only meaningful for Cycle 2+).
+    """
+    sourcedFromSnapshotId: int | None = None
+    fromQuotation: bool = False
+    parentCycleId: int | None = None
+
+
+@router.post(
+    "/quotations/{quot_id}/cycles/{cycle_id}/fws/regenerate",
+)
+def regenerate_fws_endpoint(
+    quot_id: int,
+    cycle_id: int,
+    body: RegenerateFwsBody,
+    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(get_access_context),
+):
+    """Replace the cycle's active FWS rows with rows sourced from
+    snapshot / quotation / parent cycle. Mirrors the Viability
+    Re-generate UX — user picks a source, backend rewrites the live
+    working sheet, user edits + clicks Approve next.
+
+    Returns ``{ inserted: N }`` so the FE knows how many rows were
+    written.
+    """
+    from app.models.approval_snapshot import QuotFWSApprovalSnapshot
+    from app.models.quot_order_cycle import QuotOrderCycle
+    from app.services import po_working_sheet_service
+    try:
+        require_permission(MENU, "CanEdit", ctx)
+        _get_quotation_or_403(db, quot_id, ctx)
+        cycle = _get_cycle_or_404(db, quot_id, cycle_id)
+
+        # Pick the cycle's anchor PO/LOI for the new rows' FK (every
+        # working-sheet row has to attribute to a row in QuotPurchaseOrder
+        # since quotPOId is NOT NULL). Prefer the formal PO; fall back
+        # to the first active row.
+        from app.models.quot_purchase_order import QuotPurchaseOrder
+        cycle_pos = (
+            db.query(QuotPurchaseOrder)
+            .filter(
+                QuotPurchaseOrder.quotOrderCycleId == cycle.quotOrderCycleId,
+                QuotPurchaseOrder.isActive == True,  # noqa: E712
+            )
+            .order_by(QuotPurchaseOrder.quotPOId.asc())
+            .all()
+        )
+        if not cycle_pos:
+            raise HTTPException(
+                400,
+                "Cycle has no PO or LOI. Append one before re-generating the FWS.",
+            )
+        owning_po = next((p for p in cycle_pos if not p.isLOI), cycle_pos[0])
+
+        snapshot = None
+        if body.sourcedFromSnapshotId is not None:
+            snapshot = (
+                db.query(QuotFWSApprovalSnapshot)
+                .filter(
+                    QuotFWSApprovalSnapshot.snapshotId == body.sourcedFromSnapshotId,
+                    QuotFWSApprovalSnapshot.quotOrderCycleId == cycle.quotOrderCycleId,
+                )
+                .first()
+            )
+            if snapshot is None:
+                raise HTTPException(
+                    404,
+                    f"FWS snapshot {body.sourcedFromSnapshotId} not found for this cycle.",
+                )
+
+        parent_cycle = None
+        if body.parentCycleId is not None:
+            parent_cycle = (
+                db.query(QuotOrderCycle)
+                .filter(
+                    QuotOrderCycle.quotOrderCycleId == body.parentCycleId,
+                    QuotOrderCycle.quotId == quot_id,
+                )
+                .first()
+            )
+            if parent_cycle is None:
+                raise HTTPException(
+                    404,
+                    f"Parent cycle {body.parentCycleId} not found for this quotation.",
+                )
+
+        try:
+            inserted = po_working_sheet_service.regenerate_fws(
+                db, cycle, user_id=ctx.user_id,
+                owning_po=owning_po,
+                snapshot=snapshot,
+                re_clone_from_quotation=body.fromQuotation,
+                parent_cycle=parent_cycle,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+        # Audit detail tagged with which source path ran.
+        if snapshot is not None:
+            src_detail = (
+                f"from FWS snapshot C{cycle.cycleNo}-V{snapshot.versionNo} "
+                f"(snap={snapshot.snapshotId})"
+            )
+        elif body.fromQuotation:
+            src_detail = "fresh from QuotDetails"
+        else:
+            src_detail = f"from parent cycle id={body.parentCycleId}"
+        log_action(
+            db, quot_id=quot_id, company_id=cycle.companyId,
+            action="FWS Re-generated", status="Active", ctx=ctx,
+            details=f"cycle #{cycle.cycleNo} · {src_detail} · {inserted} row(s)",
+        )
+        db.commit()
+        return {"inserted": inserted}
+    except Exception as e:
+        log_failure(
+            db, quot_id=quot_id, company_id=ctx.company_id,
+            action="FWS Re-generate", ctx=ctx, exc=e,
         )
         raise
 

@@ -766,6 +766,10 @@ def resource_annexure(
     annexure.consigneeAddress = consignee_address_text
     annexure.transportChargesFOR = transport_for_text
 
+    # Re-generate is the unlock path — flip the head back to Draft so
+    # the user can edit and re-Approve. The previously-approved
+    # snapshot stays frozen in the snapshot table for audit.
+    annexure.status = "Draft"
     annexure.lastupdateby = user_id
     annexure.lastupdateon = now_ist()
     db.flush()

@@ -168,16 +168,21 @@ def update_annexure(
     can be re-submitted as an array (stored as JSON)."""
     require_permission(MENU, "CanEdit", ctx)
     # N15: row-lock the annexure so a concurrent ``/approve`` cannot
-    # flip its status mid-flight. Soft-flow keeps the row editable
-    # post-approval, but the lock is still required so the approve and
-    # edit transactions serialize cleanly — without it both could read
+    # flip its status mid-flight. Without the row lock both could read
     # status='Draft' simultaneously and double-write the same column.
     ann = _get_annexure_or_403(db, annexure_id, ctx, for_update=True)
-    # Soft-flow: no Approved-gate on the edit path. The approval
-    # snapshot (written when status flipped to Approved) is the
-    # canonical "what was signed off" record; subsequent edits get a
-    # journaled "(after approval)" marker for the audit trail.
-    was_approved = ann.status == "Approved"
+    # 2026-05-21 lifecycle rework: Approved annexures are locked.
+    # Re-generate is the explicit unlock path (archives head, creates
+    # a fresh Draft from a picked source).
+    if ann.status == "Approved":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Annexure is locked — it was Approved. Click "
+                "Re-generate to create a fresh editable draft."
+            ),
+        )
+    was_approved = False
 
     data = body.model_dump(exclude_unset=True)
     breakup = data.pop("diawiseBreakup", None)

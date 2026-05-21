@@ -47,6 +47,11 @@ class CycleResponse(BaseModel):
     quotId: int
     cycleNo: int
     status: Literal["Active", "Complete", "Abandoned"]
+    # FWS lifecycle state — independent of the cycle's own status.
+    # ``draft`` = editable; ``approved`` = locked until Re-generate.
+    # Surfaced so the FE can gate the Approve / Re-generate / line-CRUD
+    # controls on the Final Working Sheet stage.
+    fwsStatus: Literal["draft", "approved"] = "draft"
     parentCycleId: Optional[int] = None
     startedOn: datetime
     startedBy: int

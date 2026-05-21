@@ -257,7 +257,11 @@ def approve_fws(
     if latest is not None and latest.contentHash == new_hash:
         # D3 — content unchanged. Don't grow the version chain with a
         # duplicate row; return the existing latest. Caller logs the
-        # re-approval as an audit event.
+        # re-approval as an audit event. Cycle's fwsStatus is already
+        # 'approved' in this path (or about to be flipped just below),
+        # so we set it explicitly to make idempotent re-approves
+        # converge to the locked state.
+        cycle.fwsStatus = "approved"
         return FWSApproveResult(snapshot=latest, created=False)
 
     next_version = (latest.versionNo + 1) if latest is not None else 1
@@ -284,6 +288,10 @@ def approve_fws(
         createdby=approver_user_id,
     )
     db.add(snap)
+    # Lock the cycle's FWS — Re-generate is the next path back to
+    # editable. Mirrors the Draft→Approved lifecycle Viability and
+    # Annexure already have on their head row's ``status``.
+    cycle.fwsStatus = "approved"
     db.flush()
     return FWSApproveResult(snapshot=snap, created=True)
 
@@ -330,6 +338,9 @@ def restore_fws_from_snapshot(
         },
         synchronize_session=False,
     )
+    # Restoring is structurally a new draft built from frozen source —
+    # the next Approve will lock it again with a fresh snapshot.
+    cycle.fwsStatus = "draft"
 
     # 2) Reconstruct from JSON. Strip columns that must NOT be copied
     # (ID + audit fields are owned by this restore action, not the
