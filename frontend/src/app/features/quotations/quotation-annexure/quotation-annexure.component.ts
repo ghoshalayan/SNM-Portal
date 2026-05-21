@@ -1026,18 +1026,24 @@ export class QuotationAnnexureComponent implements OnChanges {
   }
 
   /** Called when the user picks a row in the inline version picker.
-   *  One-click switch — no confirm dialog. Auto-approves the current
-   *  live state first so nothing is lost (D3 short-circuit handles
-   *  the no-change case), then loads the picked snapshot. No-ops if
-   *  the picked row is already loaded. */
+   *  View-only preview — opens the snapshot viewer dialog. Live
+   *  editor stays untouched. To resume editing on top of a past
+   *  version, use Re-generate. */
   onVersionPicked(pickedId: number): void {
     if (!this.annexure?.annexureId) return;
-    if (pickedId === this.currentSnapshotId) {
-      this.notify.info('That version is already loaded in the editor.');
-      return;
-    }
-    const action = this.canApproveAnnexure ? 'saveAndSwitch' : 'discardAndSwitch';
-    this.performVersionSwitch(pickedId, action);
+    const snap = this.snapshots.find(s => s.snapshotId === pickedId);
+    const label = snap ? `V${snap.versionNo}` : `Snapshot #${pickedId}`;
+    const annexureId = this.annexure.annexureId;
+    import('../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component')
+      .then(m => {
+        this.dialog.open(m.SnapshotViewerDialogComponent, {
+          data: {
+            url: `/annexure/${annexureId}/approval-snapshots/${pickedId}`,
+            title: `${label} — Annexure`,
+          },
+          width: '740px',
+        });
+      });
   }
 
   private performVersionSwitch(pickedId: number, action: 'saveAndSwitch' | 'discardAndSwitch'): void {

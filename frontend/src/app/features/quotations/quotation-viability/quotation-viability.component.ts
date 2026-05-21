@@ -24,6 +24,7 @@ import { NotificationService } from '../../../core/services/notification.service
 import { MenuService } from '../../../core/services/menu.service';
 import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
 import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
+import { SnapshotViewerDialogComponent } from '../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component';
 import {
   CycleService,
   ViabilityApprovalSnapshot,
@@ -1604,18 +1605,20 @@ export class QuotationViabilityComponent implements OnChanges {
   }
 
   /** Called when the user picks a row in the inline version picker.
-   *  One-click switch — no confirm dialog. Auto-approves the current
-   *  live state first so nothing is lost (D3 short-circuit handles
-   *  the no-change case), then loads the picked snapshot. No-ops if
-   *  the picked row is already loaded. */
+   *  View-only preview — opens the snapshot viewer dialog. Live
+   *  editor stays untouched. To resume editing on top of a past
+   *  version, use Re-generate. */
   onVersionPicked(pickedId: number): void {
     if (!this.sheet?.viabilityId) return;
-    if (pickedId === this.currentSnapshotId) {
-      this.notify.info('That version is already loaded in the editor.');
-      return;
-    }
-    const action = this.canApprove ? 'saveAndSwitch' : 'discardAndSwitch';
-    this.performVersionSwitch(pickedId, action);
+    const snap = this.snapshots.find(s => s.snapshotId === pickedId);
+    const label = snap ? `V${snap.versionNo}` : `Snapshot #${pickedId}`;
+    this.dialog.open(SnapshotViewerDialogComponent, {
+      data: {
+        url: `/viability/${this.sheet.viabilityId}/approval-snapshots/${pickedId}`,
+        title: `${label} — Viability Sheet`,
+      },
+      width: '740px',
+    });
   }
 
   private performVersionSwitch(pickedId: number, action: 'saveAndSwitch' | 'discardAndSwitch'): void {

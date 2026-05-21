@@ -2387,24 +2387,24 @@ export class QuotationFormComponent implements OnInit {
   }
 
   /** Called when the user picks a row in the inline version picker.
-   *  One-click switch — no confirm dialog. Auto-snapshots the current
-   *  live state as the next approved version first (the stage's
-   *  Approve endpoint handles the D3 short-circuit when content is
-   *  unchanged), then loads the picked snapshot. No data is ever lost.
-   *  No-ops if the picked id is already loaded. */
+   *  View-only preview — opens the snapshot viewer dialog with the
+   *  picked version's frozen content. The live editor stays exactly
+   *  as it was; this is just a read-only look at history. To
+   *  resume editing on top of a past version, use Re-generate. */
   onFwsVersionPicked(pickedId: number): void {
     if (!this.quotationId || !this.selectedCycleId) return;
-    if (pickedId === this.fwsCurrentSnapshotId) {
-      this.notificationService.info(
-        'That version is already loaded in the editor.',
-      );
-      return;
-    }
-    // The user with no approve permission can't auto-save — fall back
-    // to a straight load (and warn them about edit loss). Everyone else
-    // gets the safe save-then-load path.
-    const action = this.canApprove ? 'saveAndSwitch' : 'discardAndSwitch';
-    this.performFwsSwitch(pickedId, action);
+    const snap = this.fwsSnapshotList.find(s => s.snapshotId === pickedId);
+    const label = snap?.label ?? `Snapshot #${pickedId}`;
+    import('../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component')
+      .then(m => {
+        this.dialog.open(m.SnapshotViewerDialogComponent, {
+          data: {
+            url: `/quotations/${this.quotationId}/cycles/${this.selectedCycleId}/fws/approval-snapshots/${pickedId}`,
+            title: `${label} — Final Working Sheet`,
+          },
+          width: '740px',
+        });
+      });
   }
 
   /** Two-step orchestration for the FWS switch:
