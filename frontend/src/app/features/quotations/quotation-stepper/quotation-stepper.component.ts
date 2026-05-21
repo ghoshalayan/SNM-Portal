@@ -326,10 +326,20 @@ export class QuotationStepperComponent {
   }
   get viabilityVersionNo(): number | null { return this._viabVersion(); }
 
+  @Input() set viabilityVersionCount(v: number) {
+    this._viabVersionCount.set(v || 0);
+  }
+  get viabilityVersionCount(): number { return this._viabVersionCount(); }
+
   @Input() set annexureVersionNo(v: number | null | undefined) {
     this._annVersion.set(v ?? null);
   }
   get annexureVersionNo(): number | null { return this._annVersion(); }
+
+  @Input() set annexureVersionCount(v: number) {
+    this._annVersionCount.set(v || 0);
+  }
+  get annexureVersionCount(): number { return this._annVersionCount(); }
 
   /** Emitted when the user clicks a station. Parent updates
    *  ``currentStage`` and re-renders the workspace's stage panel. */
@@ -346,7 +356,9 @@ export class QuotationStepperComponent {
   private _fwsLatestLabel = signal<string | null>(null);
   private _fwsVersionCount = signal<number>(0);
   private _viabVersion = signal<number | null>(null);
+  private _viabVersionCount = signal<number>(0);
   private _annVersion = signal<number | null>(null);
+  private _annVersionCount = signal<number>(0);
 
   stops = computed<Stop[]>(() => {
     const s = this._status();
@@ -379,7 +391,9 @@ export class QuotationStepperComponent {
     const fwsLabel = this._fwsLatestLabel();
     const fwsVersions = this._fwsVersionCount();
     const viabVersion = this._viabVersion();
+    const viabVersions = this._viabVersionCount();
     const annVersion = this._annVersion();
+    const annVersions = this._annVersionCount();
 
     // PO/LOI sub-line: "1 formal · 1 LOI" or just the count side that
     // exists; folds the FWS label in as a second line so the user
@@ -398,13 +412,18 @@ export class QuotationStepperComponent {
       poSub = po ? po.toLowerCase() : 'awaiting submit';
     }
 
-    // Viability sub-line: status word on line 1, C{n}-V{m} on line 2.
+    // Viability sub-line: status word on line 1, C{n}-V{m} on line 2
+    // — with a "· N versions" suffix when the approval chain has more
+    // than one entry (mirrors the FWS rollup so all three stages read
+    // the same way).
     let viabSub: string | undefined;
     let viabDetail: string | undefined;
     if (viabReached) {
       viabSub = viabApproved ? 'approved' : 'draft';
       if (cycleNo != null && viabVersion != null) {
-        viabDetail = `C${cycleNo}-V${viabVersion}`;
+        viabDetail = viabVersions > 1
+          ? `C${cycleNo}-V${viabVersion} · ${viabVersions} versions`
+          : `C${cycleNo}-V${viabVersion}`;
       }
     }
 
@@ -414,7 +433,9 @@ export class QuotationStepperComponent {
     if (annReached) {
       annSub = annApproved ? 'approved' : 'draft';
       if (cycleNo != null && annVersion != null) {
-        annDetail = `C${cycleNo}-V${annVersion}`;
+        annDetail = annVersions > 1
+          ? `C${cycleNo}-V${annVersion} · ${annVersions} versions`
+          : `C${cycleNo}-V${annVersion}`;
       }
     }
 

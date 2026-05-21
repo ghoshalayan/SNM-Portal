@@ -248,7 +248,9 @@ export interface VersionEntry {
         [fwsLatestLabel]="fwsLatestLabel"
         [fwsVersionCount]="fwsApprovedCount"
         [viabilityVersionNo]="upstreamViabilityVersion"
+        [viabilityVersionCount]="viabilityVersionCount"
         [annexureVersionNo]="annexureVersionNo"
+        [annexureVersionCount]="annexureVersionCount"
         (stageSelected)="onStageSelected($event)">
       </app-quotation-stepper>
 
@@ -1294,6 +1296,12 @@ export class QuotationFormComponent implements OnInit {
    *  rollup so the Annexure stop can show ``C{n}-V{m}``. Hydrated by
    *  ``refreshAnnexureStatus``. */
   annexureVersionNo: number | null = null;
+  /** How many approval snapshots exist for viability + annexure on
+   *  this quotation. Drives the stepper's "· N versions" suffix on
+   *  the per-stage detail line (mirrors the FWS rollup). Hydrated by
+   *  ``refreshViabilityStatus`` / ``refreshAnnexureStatus``. */
+  viabilityVersionCount = 0;
+  annexureVersionCount = 0;
 
   /** Count of formal (non-LOI) POs in the currently selected cycle.
    *  Drives the stepper's PO/LOI rollup sub-text. Sourced from
@@ -1839,6 +1847,7 @@ export class QuotationFormComponent implements OnInit {
     if (!viabilityRelevant) {
       this.viabilityStatus = null;
       this.upstreamViabilityVersion = null;
+      this.viabilityVersionCount = 0;
       return;
     }
     this.apiService.get<any>(`/quotations/${this.quotationId}/viability`).subscribe({
@@ -1846,10 +1855,25 @@ export class QuotationFormComponent implements OnInit {
         const v = res?.viability;
         this.viabilityStatus = v ? (v.status === 'Approved' ? 'Approved' : 'Draft') : null;
         this.upstreamViabilityVersion = v?.versionNo ?? null;
+        // Fetch the approval-snapshot count so the stepper can show
+        // "C{n}-V{m} · N versions" alongside FWS. The snapshot LIST is
+        // quotation-scoped after Phase B v2; latest.versionNo IS the
+        // count because the chain is monotonic.
+        if (v?.viabilityId) {
+          this.cycleService.listViabilitySnapshots(v.viabilityId).subscribe({
+            next: (snaps) => {
+              this.viabilityVersionCount = snaps?.items?.length || 0;
+            },
+            error: () => { this.viabilityVersionCount = 0; },
+          });
+        } else {
+          this.viabilityVersionCount = 0;
+        }
       },
       error: () => {
         this.viabilityStatus = null;
         this.upstreamViabilityVersion = null;
+        this.viabilityVersionCount = 0;
       },
     });
   }
@@ -2447,12 +2471,25 @@ export class QuotationFormComponent implements OnInit {
         if (!ann || !ann.annexureId) {
           this.annexureStatus = null;
           this.annexureVersionNo = null;
+          this.annexureVersionCount = 0;
           return;
         }
         this.annexureStatus = ann.status === 'Approved' ? 'Approved' : 'Draft';
         this.annexureVersionNo = ann.versionNo ?? null;
+        // Approval-snapshot count for the stepper's "· N versions"
+        // suffix. Same pattern as viability above.
+        this.cycleService.listAnnexureSnapshots(ann.annexureId).subscribe({
+          next: (snaps) => {
+            this.annexureVersionCount = snaps?.items?.length || 0;
+          },
+          error: () => { this.annexureVersionCount = 0; },
+        });
       },
-      error: () => { this.annexureStatus = null; this.annexureVersionNo = null; },
+      error: () => {
+        this.annexureStatus = null;
+        this.annexureVersionNo = null;
+        this.annexureVersionCount = 0;
+      },
     });
   }
 
