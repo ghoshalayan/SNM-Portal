@@ -20,10 +20,11 @@ import {
   EventEmitter,
   Input,
   Output,
+  ViewChild,
 } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
-import { MatMenuModule } from '@angular/material/menu';
+import { MatMenuModule, MatMenuTrigger } from '@angular/material/menu';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 
@@ -66,7 +67,8 @@ export interface VersionInlineItem {
       <mat-icon class="vip-caret">expand_more</mat-icon>
     </button>
 
-    <mat-menu #vipMenu="matMenu" class="vip-menu" xPosition="before">
+    <mat-menu #vipMenu="matMenu" class="vip-menu" xPosition="before"
+              (closed)="onMenuClosed()">
       <div class="vip-menu-head" (click)="$event.stopPropagation()">
         <mat-icon>history</mat-icon>
         <span>{{ headLabel || 'Approved versions' }}</span>
@@ -80,10 +82,14 @@ export interface VersionInlineItem {
         No approved versions yet — approve at least once to start the history.
       </div>
 
-      <div *ngIf="!busy && items.length > 0" class="vip-list">
+      <!-- ng-container (not <div>) so each mat-menu-item button is a
+           direct child of <mat-menu> for MatMenu's ContentChildren
+           query to pick up — wrapping in a <div> can break it. -->
+      <ng-container *ngIf="!busy && items.length > 0">
         <button mat-menu-item *ngFor="let v of items"
+                type="button"
                 [class.is-active]="v.id === currentId"
-                (click)="onRowClick(v)">
+                (mousedown)="onRowMouseDown(v, $event)">
           <div class="vip-row">
             <span class="vip-kind">V</span>
             <div class="vip-row-main">
@@ -106,7 +112,7 @@ export interface VersionInlineItem {
             </div>
           </div>
         </button>
-      </div>
+      </ng-container>
     </mat-menu>
   `,
   styles: [`
@@ -204,6 +210,10 @@ export interface VersionInlineItem {
   `],
 })
 export class VersionInlinePickerComponent {
+  @ViewChild(MatMenuTrigger) private menuTrigger?: MatMenuTrigger;
+
+  constructor() {}
+
   /** Snapshot rows, newest first. Empty array hides the chip. */
   @Input() items: VersionInlineItem[] = [];
 
@@ -225,6 +235,13 @@ export class VersionInlinePickerComponent {
    *  flash a "you're already on this" toast. */
   @Output() picked = new EventEmitter<number>();
 
+  /** Holds the picked row id between the row click and the menu's
+   *  ``(closed)`` event. We defer the actual emission until after the
+   *  menu's overlay is fully torn down — opening a dialog while the
+   *  menu overlay is still attached races CDK's overlay container and
+   *  the dialog never visibly appears. */
+  private pendingPickedId: number | null = null;
+
   activeLabel(): string {
     if (this.busy) return 'Loading…';
     if (this.items.length === 0) return 'No versions yet';
@@ -239,7 +256,27 @@ export class VersionInlinePickerComponent {
     return 'Switch to a different version of this stage';
   }
 
-  onRowClick(item: VersionInlineItem): void {
-    this.picked.emit(item.id);
+  /** Mousedown is our action trigger because Material 21's focus-trap
+   *  on mat-menu can swallow the synthetic ``click`` in this layout
+   *  (mousedown on the button, mouseup on the trap wrapper → no
+   *  click). Mousedown fires reliably; we stash the picked id, then
+   *  programmatically close the menu so ``(closed)`` fires ``picked``
+   *  after the overlay is fully detached and any host-opened dialog
+   *  mounts cleanly. */
+  onRowMouseDown(item: VersionInlineItem, _event: MouseEvent): void {
+    this.pendingPickedId = item.id;
+    // Defer one tick so the mousedown bubble completes before close.
+    setTimeout(() => this.menuTrigger?.closeMenu(), 0);
+  }
+
+  /** Fires when the mat-menu's overlay has finished tearing down.
+   *  If a row was just picked via mousedown, emit ``picked`` now —
+   *  the overlay container is clean, so the host-side dialog opens
+   *  without racing the menu. */
+  onMenuClosed(): void {
+    if (this.pendingPickedId == null) return;
+    const id = this.pendingPickedId;
+    this.pendingPickedId = null;
+    this.picked.emit(id);
   }
 }

@@ -24,6 +24,7 @@ import {
   AnnexureApprovalSnapshot,
   CycleService,
 } from '../services/cycle.service';
+import { AnnexureSnapshotViewerDialogComponent } from '../../../shared/components/snapshot-viewer/annexure-snapshot-viewer-dialog.component';
 import {
   VersionInlinePickerComponent,
   VersionInlineItem,
@@ -1034,16 +1035,20 @@ export class QuotationAnnexureComponent implements OnChanges {
     const snap = this.snapshots.find(s => s.snapshotId === pickedId);
     const label = snap ? `V${snap.versionNo}` : `Snapshot #${pickedId}`;
     const annexureId = this.annexure.annexureId;
-    import('../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component')
-      .then(m => {
-        this.dialog.open(m.SnapshotViewerDialogComponent, {
-          data: {
-            url: `/annexure/${annexureId}/approval-snapshots/${pickedId}`,
-            title: `${label} — Annexure`,
-          },
-          width: '740px',
-        });
-      });
+    const sourceParts: string[] = [];
+    if (snap?.sourcedFromViabilityVersion != null) {
+      sourceParts.push(`from Viability V${snap.sourcedFromViabilityVersion}`);
+    }
+    if (snap?.customerPONo) sourceParts.push(`PO ${snap.customerPONo}`);
+    const sourceText = sourceParts.length ? sourceParts.join(' · ') : null;
+    this.dialog.open(AnnexureSnapshotViewerDialogComponent, {
+      data: {
+        url: `/annexure/${annexureId}/approval-snapshots/${pickedId}`,
+        title: `${label} — Annexure`,
+        sourceText,
+      },
+      maxWidth: '92vw',
+    });
   }
 
   private performVersionSwitch(pickedId: number, action: 'saveAndSwitch' | 'discardAndSwitch'): void {

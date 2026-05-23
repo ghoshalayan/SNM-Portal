@@ -24,7 +24,7 @@ import { NotificationService } from '../../../core/services/notification.service
 import { MenuService } from '../../../core/services/menu.service';
 import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
 import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
-import { SnapshotViewerDialogComponent } from '../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component';
+import { ViabilitySnapshotViewerDialogComponent } from '../../../shared/components/snapshot-viewer/viability-snapshot-viewer-dialog.component';
 import {
   CycleService,
   ViabilityApprovalSnapshot,
@@ -1612,12 +1612,17 @@ export class QuotationViabilityComponent implements OnChanges {
     if (!this.sheet?.viabilityId) return;
     const snap = this.snapshots.find(s => s.snapshotId === pickedId);
     const label = snap ? `V${snap.versionNo}` : `Snapshot #${pickedId}`;
-    this.dialog.open(SnapshotViewerDialogComponent, {
+    const viabilityId = this.sheet.viabilityId;
+    const sourceText = snap?.sourcedFromPOVersion != null
+      ? `from FWS V${snap.sourcedFromPOVersion}`
+      : null;
+    this.dialog.open(ViabilitySnapshotViewerDialogComponent, {
       data: {
-        url: `/viability/${this.sheet.viabilityId}/approval-snapshots/${pickedId}`,
+        url: `/viability/${viabilityId}/approval-snapshots/${pickedId}`,
         title: `${label} — Viability Sheet`,
+        sourceText,
       },
-      width: '740px',
+      maxWidth: '92vw',
     });
   }
 

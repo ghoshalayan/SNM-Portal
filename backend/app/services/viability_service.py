@@ -442,14 +442,32 @@ def generate_viability_sheet(
         or sourced_from_viability_snapshot_id is not None
     )
 
-    existing = (
+    # Cycle-scoped existing-head lookup (2026-05-22 fix). Cycle 2
+    # generating viability must NOT find Cycle 1's head and clobber
+    # it. Resolve the target cycle from the quotation's PO (post-
+    # Convert, the PO always has the right cycle FK) and filter by
+    # it. Falls back to the legacy quotation-wide lookup if no cycle
+    # context can be resolved (truly legacy pre-Phase-1A data).
+    target_po = quotation.purchase_order
+    target_cycle_id = None
+    if target_po is not None and target_po.quotOrderCycleId is not None:
+        target_cycle_id = target_po.quotOrderCycleId
+    else:
+        from app.services.cycle_service import resolve_active_cycle_id
+        target_cycle_id = resolve_active_cycle_id(db, quotation.quotId)
+
+    existing_query = (
         db.query(QuotViabilitySheet)
         .filter(
             QuotViabilitySheet.quotId == quotation.quotId,
             QuotViabilitySheet.isActive == True,
         )
-        .first()
     )
+    if target_cycle_id is not None:
+        existing_query = existing_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == target_cycle_id,
+        )
+    existing = existing_query.first()
     if existing and not explicit_source:
         # No source picked — preserve legacy idempotent behaviour.
         if existing.status != "Approved":

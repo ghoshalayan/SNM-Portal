@@ -289,23 +289,35 @@ def create_viability(
 @router.get("/quotations/{quot_id}/viability", response_model=ViabilityBundleResponse)
 def get_viability(
     quot_id: int,
+    cycleId: int | None = None,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
     """Return the working sheet snapshot + the current viability sheet (if any).
     The viability field is null when not yet generated.
+
+    Cycle scoping (2026-05-22 fix): pass ``?cycleId=`` to scope the head
+    lookup to a specific cycle. Each cycle owns its own viability head;
+    without this the non-deterministic ``.first()`` pick was returning
+    whichever sister sheet SQL Server surfaced first on multi-cycle
+    quotations. Omitting ``cycleId`` keeps the legacy "any active sheet"
+    behaviour for callers that don't know about cycles.
     """
     require_permission(MENU, "CanRead", ctx)
     _get_quotation_or_403(db, quot_id, ctx)
 
-    sheet = (
+    sheet_query = (
         db.query(QuotViabilitySheet)
         .filter(
             QuotViabilitySheet.quotId == quot_id,
             QuotViabilitySheet.isActive == True,
         )
-        .first()
     )
+    if cycleId is not None:
+        sheet_query = sheet_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == cycleId,
+        )
+    sheet = sheet_query.first()
     if not sheet:
         # Return working sheet only; client uses this to render the "Generate" CTA
         return {
@@ -608,12 +620,29 @@ def list_viability_snapshots(
     import json
     require_permission(MENU, "CanRead", ctx)
     sheet = _get_sheet_or_403(db, viability_id, ctx)
-    snaps = (
+    # Cycle-scoped list (2026-05-22 fix). JOIN through the sheet to
+    # collect every snapshot whose sheet shares this cycle's id —
+    # spans the head + any predecessor sheets created by prior
+    # Re-generates inside the same cycle. Falls back to per-sheet
+    # when the head pre-dates the cycle migration.
+    base_query = (
         db.query(QuotViabilityApprovalSnapshot)
-        .filter(QuotViabilityApprovalSnapshot.quotId == sheet.quotId)
-        .order_by(QuotViabilityApprovalSnapshot.snapshotId.desc())
-        .all()
+        .join(
+            QuotViabilitySheet,
+            QuotViabilityApprovalSnapshot.viabilityId == QuotViabilitySheet.viabilityId,
+        )
     )
+    if sheet.quotOrderCycleId is not None:
+        base_query = base_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == sheet.quotOrderCycleId,
+        )
+    else:
+        base_query = base_query.filter(
+            QuotViabilityApprovalSnapshot.viabilityId == viability_id,
+        )
+    snaps = base_query.order_by(
+        QuotViabilityApprovalSnapshot.snapshotId.desc(),
+    ).all()
 
     # Enrich each summary with the upstream-version pointer parsed
     # from the blob. The blob carries the full sheet row at approval
@@ -662,12 +691,24 @@ def get_latest_viability_snapshot(
     require_permission(MENU, "CanRead", ctx)
     sheet = _get_sheet_or_403(db, viability_id, ctx)
 
-    snap = (
+    base_query = (
         db.query(QuotViabilityApprovalSnapshot)
-        .filter(QuotViabilityApprovalSnapshot.quotId == sheet.quotId)
-        .order_by(QuotViabilityApprovalSnapshot.snapshotId.desc())
-        .first()
+        .join(
+            QuotViabilitySheet,
+            QuotViabilityApprovalSnapshot.viabilityId == QuotViabilitySheet.viabilityId,
+        )
     )
+    if sheet.quotOrderCycleId is not None:
+        base_query = base_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == sheet.quotOrderCycleId,
+        )
+    else:
+        base_query = base_query.filter(
+            QuotViabilityApprovalSnapshot.viabilityId == viability_id,
+        )
+    snap = base_query.order_by(
+        QuotViabilityApprovalSnapshot.snapshotId.desc(),
+    ).first()
     if snap is None:
         raise HTTPException(404, "No approval snapshot for this viability sheet yet.")
     body = json.loads(snap.snapshotData)
@@ -698,14 +739,23 @@ def get_viability_snapshot_by_id(
     import json
     require_permission(MENU, "CanRead", ctx)
     sheet = _get_sheet_or_403(db, viability_id, ctx)
-    snap = (
+    base_query = (
         db.query(QuotViabilityApprovalSnapshot)
-        .filter(
-            QuotViabilityApprovalSnapshot.snapshotId == snapshot_id,
-            QuotViabilityApprovalSnapshot.quotId == sheet.quotId,
+        .join(
+            QuotViabilitySheet,
+            QuotViabilityApprovalSnapshot.viabilityId == QuotViabilitySheet.viabilityId,
         )
-        .first()
+        .filter(QuotViabilityApprovalSnapshot.snapshotId == snapshot_id)
     )
+    if sheet.quotOrderCycleId is not None:
+        base_query = base_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == sheet.quotOrderCycleId,
+        )
+    else:
+        base_query = base_query.filter(
+            QuotViabilityApprovalSnapshot.viabilityId == viability_id,
+        )
+    snap = base_query.first()
     if snap is None:
         raise HTTPException(404, "Snapshot not found for this viability sheet.")
     body = json.loads(snap.snapshotData)
@@ -752,19 +802,29 @@ def load_viability_snapshot(
     try:
         require_permission(MENU, "CanEdit", ctx)
         sheet = _get_sheet_or_403(db, viability_id, ctx)
-        # Quotation-wide lookup so loading a snapshot from a prior
-        # sheet (pre-Re-generate) still works. The restore writes the
-        # picked snapshot's blob into the *current* sheet — picking V2
-        # from an archived predecessor brings its data forward into
-        # today's working draft.
-        snap = (
+        # Cycle-scoped lookup (2026-05-22 fix). Loading a snapshot
+        # from a sister sheet (created by a prior Re-generate in the
+        # same cycle) still works. Cross-cycle loads are blocked —
+        # Cycle 2's user can't accidentally pull Cycle 1's snapshot
+        # into Cycle 2's head, which would silently break cycle
+        # isolation.
+        base_query = (
             db.query(QuotViabilityApprovalSnapshot)
-            .filter(
-                QuotViabilityApprovalSnapshot.snapshotId == snapshot_id,
-                QuotViabilityApprovalSnapshot.quotId == sheet.quotId,
+            .join(
+                QuotViabilitySheet,
+                QuotViabilityApprovalSnapshot.viabilityId == QuotViabilitySheet.viabilityId,
             )
-            .first()
+            .filter(QuotViabilityApprovalSnapshot.snapshotId == snapshot_id)
         )
+        if sheet.quotOrderCycleId is not None:
+            base_query = base_query.filter(
+                QuotViabilitySheet.quotOrderCycleId == sheet.quotOrderCycleId,
+            )
+        else:
+            base_query = base_query.filter(
+                QuotViabilityApprovalSnapshot.viabilityId == viability_id,
+            )
+        snap = base_query.first()
         if snap is None:
             raise HTTPException(404, "Snapshot not found for this viability sheet.")
         try:

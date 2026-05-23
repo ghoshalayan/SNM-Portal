@@ -107,17 +107,30 @@ def write_viability_snapshot(
     serialized = json.dumps(payload, default=_json_default, sort_keys=True)
     new_hash = _content_hash(serialized)
 
-    # Quotation-wide latest lookup (Phase B fix v2 2026-05-21) — the
-    # earlier cycle-JOIN scoping excluded sister sheets whose cycleId
-    # was NULL, breaking the version counter across Re-generates. The
-    # quotation scope guarantees version-chain continuity regardless of
-    # whether cycle data is populated on sister rows.
-    latest = (
+    # Cycle-scoped latest lookup (2026-05-22 fix). The version chain
+    # restarts at V1 per cycle so a fresh cycle's first Approve is
+    # labelled V1, not V{N+1} where N is the previous cycle's count.
+    # JOIN through the sheet to walk the cycle's chain; fall back to
+    # per-sheet lookup for legacy data pre-Phase-1A where cycleId is
+    # NULL.
+    latest_query = (
         db.query(QuotViabilityApprovalSnapshot)
-        .filter(QuotViabilityApprovalSnapshot.quotId == sheet.quotId)
-        .order_by(QuotViabilityApprovalSnapshot.snapshotId.desc())
-        .first()
+        .join(
+            QuotViabilitySheet,
+            QuotViabilityApprovalSnapshot.viabilityId == QuotViabilitySheet.viabilityId,
+        )
     )
+    if sheet.quotOrderCycleId is not None:
+        latest_query = latest_query.filter(
+            QuotViabilitySheet.quotOrderCycleId == sheet.quotOrderCycleId,
+        )
+    else:
+        latest_query = latest_query.filter(
+            QuotViabilityApprovalSnapshot.viabilityId == sheet.viabilityId,
+        )
+    latest = latest_query.order_by(
+        QuotViabilityApprovalSnapshot.snapshotId.desc(),
+    ).first()
 
     # D3: hash-equality short-circuit. NULL contentHash on legacy rows
     # (pre-migration e2f3g4h5i6j7) falls through and a fresh snapshot

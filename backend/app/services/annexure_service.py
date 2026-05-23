@@ -108,14 +108,49 @@ def generate_annexure(
             f"(quotation status is currently {quotation.status})."
         )
 
-    existing = (
+    # Cycle-scoped existing-head lookup (2026-05-22 fix). One annexure
+    # per cycle (CR decision C2); Cycle 2's generate must not return
+    # Cycle 1's annexure as "existing". Resolve the target cycle from
+    # whichever explicit source the caller passed; fall back to the
+    # legacy single-PO path or the quotation's active cycle.
+    target_cycle_id = None
+    if sourced_from_viability_id is not None:
+        row = (
+            db.query(QuotViabilitySheet.quotOrderCycleId)
+            .filter(QuotViabilitySheet.viabilityId == sourced_from_viability_id)
+            .first()
+        )
+        if row is not None:
+            target_cycle_id = row[0]
+    if target_cycle_id is None and sourced_from_po_id is not None:
+        from app.models.quot_purchase_order import QuotPurchaseOrder
+        row = (
+            db.query(QuotPurchaseOrder.quotOrderCycleId)
+            .filter(QuotPurchaseOrder.quotPOId == sourced_from_po_id)
+            .first()
+        )
+        if row is not None:
+            target_cycle_id = row[0]
+    if target_cycle_id is None:
+        legacy_po = quotation.purchase_order
+        if legacy_po is not None and legacy_po.quotOrderCycleId is not None:
+            target_cycle_id = legacy_po.quotOrderCycleId
+    if target_cycle_id is None:
+        from app.services.cycle_service import resolve_active_cycle_id
+        target_cycle_id = resolve_active_cycle_id(db, quotation.quotId)
+
+    existing_query = (
         db.query(QuotAnnexure)
         .filter(
             QuotAnnexure.quotId == quotation.quotId,
             QuotAnnexure.isActive == True,
         )
-        .first()
     )
+    if target_cycle_id is not None:
+        existing_query = existing_query.filter(
+            QuotAnnexure.quotOrderCycleId == target_cycle_id,
+        )
+    existing = existing_query.first()
     if existing:
         return existing
 

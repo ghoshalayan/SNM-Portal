@@ -35,6 +35,7 @@ import { StageShellComponent, StagePrimaryCta, StageStatus } from '../shared/sta
 import { QuotationAnnexureComponent } from '../quotation-annexure/quotation-annexure.component';
 import { QuotationPoDialogComponent } from '../quotation-po-dialog/quotation-po-dialog.component';
 import { LifecycleUnlockDialogComponent } from '../lifecycle-unlock-dialog/lifecycle-unlock-dialog.component';
+import { FwsSnapshotViewerDialogComponent } from '../../../shared/components/snapshot-viewer/fws-snapshot-viewer-dialog.component';
 import { StaleBannerComponent } from '../stale-banner/stale-banner.component';
 import { CycleSelectorComponent } from '../cycle-selector/cycle-selector.component';
 import { CycleHistoryComponent } from '../cycle-history/cycle-history.component';
@@ -774,10 +775,6 @@ export interface VersionEntry {
                 <mat-icon>lock_open</mat-icon> Unlock &amp; Edit
               </button>
 
-              <span *ngIf="viabilityApproved" class="stage-status-chip is-locked"
-                    matTooltip="Locked because the Viability Sheet has been approved. Re-source from upstream to revisit.">
-                <mat-icon>lock</mat-icon> Locked
-              </span>
             </div>
           </div>
 
@@ -1906,24 +1903,40 @@ export class QuotationFormComponent implements OnInit {
       this.viabilityVersionCount = 0;
       return;
     }
-    this.apiService.get<any>(`/quotations/${this.quotationId}/viability`).subscribe({
+    // Cycle-scoped GET (2026-05-22 fix). Without ?cycleId= the
+    // backend's .first() pick is non-deterministic when a quotation
+    // has multiple cycles each with their own viability head.
+    const params = this.selectedCycleId
+      ? { cycleId: this.selectedCycleId }
+      : undefined;
+    this.apiService.get<any>(
+      `/quotations/${this.quotationId}/viability`,
+      params,
+    ).subscribe({
       next: (res) => {
         const v = res?.viability;
         this.viabilityStatus = v ? (v.status === 'Approved' ? 'Approved' : 'Draft') : null;
-        this.upstreamViabilityVersion = v?.versionNo ?? null;
-        // Fetch the approval-snapshot count so the stepper can show
-        // "C{n}-V{m} · N versions" alongside FWS. The snapshot LIST is
-        // quotation-scoped after Phase B v2; latest.versionNo IS the
-        // count because the chain is monotonic.
         if (v?.viabilityId) {
           this.cycleService.listViabilitySnapshots(v.viabilityId).subscribe({
             next: (snaps) => {
-              this.viabilityVersionCount = snaps?.items?.length || 0;
+              const items = snaps?.items || [];
+              this.viabilityVersionCount = items.length;
+              // Read the stepper's version display from the LATEST
+              // snapshot's versionNo (cycle-scoped after my Phase B
+              // v3 fix) so the stepper number always matches the
+              // chip number — no more "stepper V1, chip V3" mismatch.
+              this.upstreamViabilityVersion = items.length > 0
+                ? items[0].versionNo
+                : (v.versionNo ?? null);
             },
-            error: () => { this.viabilityVersionCount = 0; },
+            error: () => {
+              this.viabilityVersionCount = 0;
+              this.upstreamViabilityVersion = v.versionNo ?? null;
+            },
           });
         } else {
           this.viabilityVersionCount = 0;
+          this.upstreamViabilityVersion = null;
         }
       },
       error: () => {
@@ -2149,9 +2162,12 @@ export class QuotationFormComponent implements OnInit {
   onCycleSelected(cycle: OrderCycle): void {
     this.selectedCycleId = cycle.quotOrderCycleId;
     this.loadFwsApprovalState();
-    // Phase 1D: pill click just flips selection. Phase 1E will wire
-    // the per-cycle bundle fetch into the FWS/viability/annexure
-    // panels so they show data scoped to the selected cycle.
+    // 2026-05-22 cycle-scoping fix: also re-fetch viability + annexure
+    // so the per-cycle head + snapshot chain rebinds when the user
+    // flips cycles. Without this, viability/annexure state stays
+    // stuck on whichever cycle's head loaded first.
+    this.refreshViabilityStatus();
+    this.refreshAnnexureStatus();
   }
 
   /** Re-fetch the full cycle list from the backend. Call after any
@@ -2395,16 +2411,16 @@ export class QuotationFormComponent implements OnInit {
     if (!this.quotationId || !this.selectedCycleId) return;
     const snap = this.fwsSnapshotList.find(s => s.snapshotId === pickedId);
     const label = snap?.label ?? `Snapshot #${pickedId}`;
-    import('../../../shared/components/snapshot-viewer/snapshot-viewer-dialog.component')
-      .then(m => {
-        this.dialog.open(m.SnapshotViewerDialogComponent, {
-          data: {
-            url: `/quotations/${this.quotationId}/cycles/${this.selectedCycleId}/fws/approval-snapshots/${pickedId}`,
-            title: `${label} — Final Working Sheet`,
-          },
-          width: '740px',
-        });
-      });
+    const quotationId = this.quotationId;
+    const cycleId = this.selectedCycleId;
+    this.dialog.open(FwsSnapshotViewerDialogComponent, {
+      data: {
+        url: `/quotations/${quotationId}/cycles/${cycleId}/fws/approval-snapshots/${pickedId}`,
+        title: `${label} — Final Working Sheet`,
+        sourceText: null,
+      },
+      maxWidth: '92vw',
+    });
   }
 
   /** Two-step orchestration for the FWS switch:
@@ -2648,7 +2664,15 @@ export class QuotationFormComponent implements OnInit {
    *  read the per-stage status directly via /quotations/{id}/annexure. */
   private refreshAnnexureStatus(): void {
     if (!this.quotationId) return;
-    this.apiService.get<any>(`/quotations/${this.quotationId}/annexure`).subscribe({
+    // Cycle-scoped GET (2026-05-22 fix). Without ?cycleId= the
+    // backend's .first() pick is non-deterministic across cycles.
+    const params = this.selectedCycleId
+      ? { cycleId: this.selectedCycleId }
+      : undefined;
+    this.apiService.get<any>(
+      `/quotations/${this.quotationId}/annexure`,
+      params,
+    ).subscribe({
       next: (ann) => {
         if (!ann || !ann.annexureId) {
           this.annexureStatus = null;
@@ -2657,14 +2681,21 @@ export class QuotationFormComponent implements OnInit {
           return;
         }
         this.annexureStatus = ann.status === 'Approved' ? 'Approved' : 'Draft';
-        this.annexureVersionNo = ann.versionNo ?? null;
-        // Approval-snapshot count for the stepper's "· N versions"
-        // suffix. Same pattern as viability above.
+        // Approval-snapshot count + latest versionNo (matches the
+        // chip the user clicks — annexure snapshots are per-
+        // annexureId, which after Phase 1 is per-cycle).
         this.cycleService.listAnnexureSnapshots(ann.annexureId).subscribe({
           next: (snaps) => {
-            this.annexureVersionCount = snaps?.items?.length || 0;
+            const items = snaps?.items || [];
+            this.annexureVersionCount = items.length;
+            this.annexureVersionNo = items.length > 0
+              ? items[0].versionNo
+              : (ann.versionNo ?? null);
           },
-          error: () => { this.annexureVersionCount = 0; },
+          error: () => {
+            this.annexureVersionCount = 0;
+            this.annexureVersionNo = ann.versionNo ?? null;
+          },
         });
       },
       error: () => {

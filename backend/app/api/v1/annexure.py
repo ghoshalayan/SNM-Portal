@@ -138,20 +138,30 @@ def create_annexure(
 @router.get("/quotations/{quot_id}/annexure", response_model=Optional[AnnexureResponse])
 def get_annexure(
     quot_id: int,
+    cycleId: int | None = None,
     db: Session = Depends(get_db),
     ctx: AccessContext = Depends(get_access_context),
 ):
-    """Returns the annexure, or null when none has been generated yet."""
+    """Returns the annexure, or null when none has been generated yet.
+
+    Cycle scoping (2026-05-22 fix): pass ``?cycleId=`` to scope to a
+    specific cycle's annexure head. One annexure per cycle (CR
+    decision C2). Omitting falls back to "any active row" for legacy
+    callers that haven't been cycle-aware-updated yet."""
     require_permission(MENU, "CanRead", ctx)
     _get_quotation_or_403(db, quot_id, ctx)
-    ann = (
+    ann_query = (
         db.query(QuotAnnexure)
         .filter(
             QuotAnnexure.quotId == quot_id,
             QuotAnnexure.isActive == True,
         )
-        .first()
     )
+    if cycleId is not None:
+        ann_query = ann_query.filter(
+            QuotAnnexure.quotOrderCycleId == cycleId,
+        )
+    ann = ann_query.first()
     if not ann:
         return None
     return _to_response(ann)
