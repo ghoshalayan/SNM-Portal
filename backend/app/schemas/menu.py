@@ -73,6 +73,14 @@ class RoleMenuPermission(BaseModel):
     canUnlockEditPO: bool = False
     canUnlockEditViability: bool = False
     canUnlockEditAnnexure: bool = False
+    # LOI / Cycle CR — Phase 1A flags.
+    canCaptureLOI: bool = False
+    canStartNewCycle: bool = False
+    # Post-Convert lifecycle Approve + Regenerate flags.
+    canApproveFWS: bool = False
+    canRegenerateFWS: bool = False
+    canRegenerateViability: bool = False
+    canRegenerateAnnexure: bool = False
 
 
 class RoleMenuPermissionResponse(BaseModel):
@@ -98,6 +106,14 @@ class RoleMenuPermissionResponse(BaseModel):
     canUnlockEditPO: bool = False
     canUnlockEditViability: bool = False
     canUnlockEditAnnexure: bool = False
+    # LOI / Cycle CR — Phase 1A flags.
+    canCaptureLOI: bool = False
+    canStartNewCycle: bool = False
+    # Post-Convert lifecycle Approve + Regenerate flags.
+    canApproveFWS: bool = False
+    canRegenerateFWS: bool = False
+    canRegenerateViability: bool = False
+    canRegenerateAnnexure: bool = False
 
     class Config:
         from_attributes = True

@@ -39,6 +39,13 @@ export interface MenuPermission {
    *  closing / abandoning one (HOD-and-above). */
   canCaptureLOI?: boolean;
   canStartNewCycle?: boolean;
+  /** Post-Convert Approve + Regenerate per stage. Dedicated gates so
+   *  each stage's Approve / Re-generate buttons can be granted
+   *  independently of the broader CanApprove / CanEdit flags. */
+  canApproveFWS?: boolean;
+  canRegenerateFWS?: boolean;
+  canRegenerateViability?: boolean;
+  canRegenerateAnnexure?: boolean;
   children?: MenuPermission[];
 }
 
@@ -75,6 +82,8 @@ export const ALL_PERMISSION_FLAGS: (keyof MenuPermission)[] = [
   'canUnlockEditQuotation', 'canUnlockEditPO',
   'canUnlockEditViability', 'canUnlockEditAnnexure',
   'canCaptureLOI', 'canStartNewCycle',
+  'canApproveFWS', 'canRegenerateFWS',
+  'canRegenerateViability', 'canRegenerateAnnexure',
 ];
 
 export type FlagKey =
@@ -85,7 +94,9 @@ export type FlagKey =
   | 'canApproveViability'
   | 'canUnlockEditQuotation' | 'canUnlockEditPO'
   | 'canUnlockEditViability' | 'canUnlockEditAnnexure'
-  | 'canCaptureLOI' | 'canStartNewCycle';
+  | 'canCaptureLOI' | 'canStartNewCycle'
+  | 'canApproveFWS' | 'canRegenerateFWS'
+  | 'canRegenerateViability' | 'canRegenerateAnnexure';
 
 /** Preset templates for quick role baseline. */
 export interface PermissionPreset {

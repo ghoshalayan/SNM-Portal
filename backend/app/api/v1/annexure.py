@@ -472,7 +472,11 @@ def resource_annexure_endpoint(
         body.model_dump(),
     )
     try:
-        require_permission(MENU, "CanEdit", ctx)
+        # CanRegenerateAnnexure is the dedicated gate for re-sourcing
+        # the annexure from a different viability version; CanEdit is
+        # the legacy fallback.
+        if not ctx.has_permission(MENU, "CanRegenerateAnnexure"):
+            require_permission(MENU, "CanEdit", ctx)
         ann = _get_annexure_or_403(db, annexure_id, ctx, for_update=True)
         viability = (
             db.query(QuotViabilitySheet)

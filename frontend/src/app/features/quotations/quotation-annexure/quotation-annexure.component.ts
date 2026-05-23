@@ -136,7 +136,7 @@ export interface Annexure {
             <!-- Re-generate is visible even when locked since it is
                  the explicit unlock path. The parent-supplied readOnly
                  input (Revised-quotation hard freeze) still suppresses it. -->
-            @if (!readOnly) {
+            @if (!readOnly && (canRegenerate || canApprove || canApproveAnnexure)) {
               <button mat-stroked-button (click)="resource()"
                       [disabled]="saving || switching"
                       matTooltip="Re-generate the annexure from a different Viability version or PO/LOI. Unlocks the editor and creates a fresh Draft.">
@@ -611,6 +611,10 @@ export class QuotationAnnexureComponent implements OnChanges {
    *    2. Override of the post-approval lock — Commercial HODs can edit
    *       an annexure even after status = Approved. */
   @Input() canApproveAnnexure = false;
+  /** Gates the Re-source / Re-generate button. Falls back to
+   *  ``canApprove`` for legacy roles that don't yet have the dedicated
+   *  ``CanRegenerateAnnexure`` flag. */
+  @Input() canRegenerate = false;
   @Input() readOnly = false;
   // Phase 1 Unlock-and-Edit flag for the Annexure stage. Resolved
   // from the menu service in the constructor. Distinct from

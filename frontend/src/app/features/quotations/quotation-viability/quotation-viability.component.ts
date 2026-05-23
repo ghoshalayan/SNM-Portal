@@ -212,7 +212,7 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
               <mat-icon>verified</mat-icon> Approve Viability
             </button>
           }
-          @if (sheet && canApprove) {
+          @if (sheet && (canRegenerate || canApprove)) {
             <button mat-stroked-button color="primary" (click)="regenerate()" [disabled]="busy || switching"
               matTooltip="Pick a different FWS version or past Viability version as the source and build a fresh draft from it. Carries goal-seek state forward when sourcing from a past Viability.">
               <mat-icon>refresh</mat-icon> Re-generate
@@ -898,6 +898,10 @@ interface LengthOpt { itemLengthId: number; itemId: number; itemLength: string; 
 export class QuotationViabilityComponent implements OnChanges {
   @Input({ required: true }) quotId!: number;
   @Input() canApprove = false;
+  /** Gates the Re-generate button. Falls back to ``canApprove`` for
+   *  legacy roles that don't yet have the dedicated
+   *  ``CanRegenerateViability`` flag. */
+  @Input() canRegenerate = false;
   @Input() readOnly = false;
   // Phase 1 Unlock-and-Edit flag for the Viability stage. Resolved
   // from the menu service in the constructor (privileged users only).

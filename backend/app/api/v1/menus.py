@@ -174,6 +174,11 @@ def get_permission_schema(
             "canApproveViability",
             "canUnlockEditQuotation", "canUnlockEditPO",
             "canUnlockEditViability", "canUnlockEditAnnexure",
+            # Phase 1A — LOI / Cycle CR flags.
+            "canCaptureLOI", "canStartNewCycle",
+            # Post-Convert Approve + Regenerate per stage.
+            "canApproveFWS", "canRegenerateFWS",
+            "canRegenerateViability", "canRegenerateAnnexure",
         ],
         "Enquiries": [
             "canEditNumber", "canApprove",
@@ -203,6 +208,12 @@ def get_permission_schema(
         "canUnlockEditPO": "Unlock PO",
         "canUnlockEditViability": "Unlock Viability",
         "canUnlockEditAnnexure": "Unlock Annexure",
+        "canCaptureLOI": "Capture LOI",
+        "canStartNewCycle": "Start / Close Cycle",
+        "canApproveFWS": "Approve FWS",
+        "canRegenerateFWS": "Re-generate FWS",
+        "canRegenerateViability": "Re-generate Viability",
+        "canRegenerateAnnexure": "Re-generate Annexure",
     }
     # One-line business hints used in tooltips and the preview strip.
     descriptions = {
@@ -225,6 +236,12 @@ def get_permission_schema(
         "canUnlockEditPO": "Privileged: edit a Submitted/locked PO in place (audited)",
         "canUnlockEditViability": "Privileged: edit an Approved viability sheet in place (audited)",
         "canUnlockEditAnnexure": "Privileged: edit an Approved annexure in place (audited; equivalent of CanApproveAnnexure)",
+        "canCaptureLOI": "Append a Letter of Intent to the active call-off cycle",
+        "canStartNewCycle": "Open a new call-off cycle, or close / abandon an existing one",
+        "canApproveFWS": "Approve the cycle's Final Working Sheet (Stage 2 forward gate)",
+        "canRegenerateFWS": "Re-generate the Final Working Sheet from a past FWS, quotation lines, or a parent cycle",
+        "canRegenerateViability": "Re-generate the Viability Sheet from a past FWS or a past Viability version",
+        "canRegenerateAnnexure": "Re-source the Annexure from a past Viability version",
     }
     return {
         "core": CORE,
@@ -281,6 +298,14 @@ def get_role_menu_permissions(
             "canUnlockEditPO": m.CanUnlockEditPO if m else False,
             "canUnlockEditViability": m.CanUnlockEditViability if m else False,
             "canUnlockEditAnnexure": m.CanUnlockEditAnnexure if m else False,
+            # Phase 1A — LOI / Cycle CR.
+            "canCaptureLOI": m.CanCaptureLOI if m else False,
+            "canStartNewCycle": m.CanStartNewCycle if m else False,
+            # Post-Convert Approve + Regenerate per stage.
+            "canApproveFWS": m.CanApproveFWS if m else False,
+            "canRegenerateFWS": m.CanRegenerateFWS if m else False,
+            "canRegenerateViability": m.CanRegenerateViability if m else False,
+            "canRegenerateAnnexure": m.CanRegenerateAnnexure if m else False,
         })
     return result
 
@@ -321,6 +346,14 @@ def save_role_menu_permissions(
         "canUnlockEditPO": "CanUnlockEditPO",
         "canUnlockEditViability": "CanUnlockEditViability",
         "canUnlockEditAnnexure": "CanUnlockEditAnnexure",
+        # Phase 1A — LOI / Cycle CR.
+        "canCaptureLOI": "CanCaptureLOI",
+        "canStartNewCycle": "CanStartNewCycle",
+        # Post-Convert Approve + Regenerate per stage.
+        "canApproveFWS": "CanApproveFWS",
+        "canRegenerateFWS": "CanRegenerateFWS",
+        "canRegenerateViability": "CanRegenerateViability",
+        "canRegenerateAnnexure": "CanRegenerateAnnexure",
     }
 
     # Snapshot current state BEFORE any mutation so the diff is accurate.

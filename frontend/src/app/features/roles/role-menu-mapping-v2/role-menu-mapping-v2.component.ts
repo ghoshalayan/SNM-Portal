@@ -22,6 +22,7 @@ import {
   RoleCopyFromDialogComponent,
 } from './role-copy-from-dialog.component';
 import {
+  ALL_PERMISSION_FLAGS,
   MenuPermission,
   PermissionConflict,
   PermissionSchema,
@@ -296,37 +297,33 @@ export class RoleMenuMappingV2Component implements OnInit {
     if (!this.settings || this.saving) return;
     this.saving = true;
 
-    // Backend's Pydantic ``RoleMenuPermission`` defaults every field to
-    // false, so any flag NOT in this payload silently resets to false on
-    // save — even if the user just toggled it. Round-trip every flag the
-    // backend knows about. The matrix component is schema-driven, so flags
-    // the current company doesn't surface still reach us via the GET (and
-    // we send them back unchanged), keeping data intact across role pages
-    // that render different subsets.
-    const permPayload = this.flatPermissions.map(p => ({
-      menuId: p.menuId,
-      canAdd: !!p.canAdd,
-      canRead: !!p.canRead,
-      canEdit: !!p.canEdit,
-      canDelete: !!p.canDelete,
-      canEditNumber: !!p.canEditNumber,
-      canApprove: !!p.canApprove,
-      canRevise: !!p.canRevise,
-      canTransferOwnership: !!p.canTransferOwnership,
-      canGenerateUnderOthers: !!p.canGenerateUnderOthers,
-      canApproveAnnexure: !!p.canApproveAnnexure,
-      canConvert: !!p.canConvert,
-      canReactivate: !!p.canReactivate,
-      canSubmitPO: !!p.canSubmitPO,
-      canRejectPO: !!p.canRejectPO,
-      canApproveViability: !!p.canApproveViability,
-      canUnlockEditQuotation: !!p.canUnlockEditQuotation,
-      canUnlockEditPO: !!p.canUnlockEditPO,
-      canUnlockEditViability: !!p.canUnlockEditViability,
-      canUnlockEditAnnexure: !!p.canUnlockEditAnnexure,
-      canCaptureLOI: !!p.canCaptureLOI,
-      canStartNewCycle: !!p.canStartNewCycle,
-    }));
+    // Schema-driven payload: forward *every* canXxx flag from the
+    // loaded permission row. The backend's Pydantic schema accepts
+    // them, the save handler iterates FIELD_TO_COL and writes the
+    // ones it knows about, and unknown keys are rejected with 422
+    // (loud failure at the API edge instead of silent unchecking).
+    //
+    // Why this matters: the previous hardcoded list silently dropped
+    // any newly-added flag — user checks a box, save's POST omits it,
+    // backend writes false, reload shows it unchecked. With this
+    // passthrough, every flag the GET endpoint returns is round-
+    // tripped automatically.
+    const SKIP_KEYS = new Set<string>([
+      'menuName', 'parentMenuId', 'menuOrder', 'children',
+    ]);
+    const permPayload = this.flatPermissions.map(p => {
+      const out: Record<string, any> = { menuId: p.menuId };
+      for (const key of Object.keys(p) as (keyof typeof p)[]) {
+        if (key === 'menuId' || SKIP_KEYS.has(key as string)) continue;
+        // Only flag-shape keys (canXxx) get coerced + forwarded;
+        // anything else from the row is dropped to avoid sending
+        // metadata the backend's `extra="forbid"` would reject.
+        if (typeof key === 'string' && key.startsWith('can')) {
+          out[key] = !!p[key];
+        }
+      }
+      return out;
+    });
 
     forkJoin({
       flags: this.api.put(`/roles/${this.roleId}/num-gen-mode`, {
@@ -402,31 +399,13 @@ export class RoleMenuMappingV2Component implements OnInit {
       for (const copied of result.permissions) {
         const target = byMenu.get(copied.menuId);
         if (!target) continue;
-        target.canAdd = copied.canAdd;
-        target.canRead = copied.canRead;
-        target.canEdit = copied.canEdit;
-        target.canDelete = copied.canDelete;
-        target.canEditNumber = copied.canEditNumber;
-        target.canApprove = copied.canApprove;
-        target.canRevise = copied.canRevise;
-        target.canTransferOwnership = copied.canTransferOwnership;
-        target.canGenerateUnderOthers = copied.canGenerateUnderOthers;
-        target.canApproveAnnexure = copied.canApproveAnnexure;
-        // Phase-1 lifecycle flags — must be carried along, otherwise
-        // "Copy from" silently resets them on the destination role.
-        target.canConvert = copied.canConvert;
-        target.canReactivate = copied.canReactivate;
-        target.canSubmitPO = copied.canSubmitPO;
-        target.canRejectPO = copied.canRejectPO;
-        target.canApproveViability = copied.canApproveViability;
-        target.canUnlockEditQuotation = copied.canUnlockEditQuotation;
-        target.canUnlockEditPO = copied.canUnlockEditPO;
-        target.canUnlockEditViability = copied.canUnlockEditViability;
-        target.canUnlockEditAnnexure = copied.canUnlockEditAnnexure;
-        // LOI / Cycle CR — Phase 1A flags. Same rule as above: without
-        // these, "Copy from" silently resets them to false on the dest.
-        target.canCaptureLOI = copied.canCaptureLOI;
-        target.canStartNewCycle = copied.canStartNewCycle;
+        // Iterate ALL_PERMISSION_FLAGS so any flag added to the type
+        // automatically participates in Copy-from. Prevents the
+        // hardcoded-list silent-drop bug we previously had to fix
+        // every time a new flag landed.
+        for (const flag of ALL_PERMISSION_FLAGS) {
+          (target as any)[flag] = !!(copied as any)[flag];
+        }
       }
       this.flatPermissions = [...this.flatPermissions];
       this.recomputeConflicts();

@@ -255,7 +255,12 @@ def create_viability(
     legacy live-FWS path runs.
     """
     try:
-        require_permission(MENU, "CanEdit", ctx)
+        # CanRegenerateViability is the dedicated gate for re-generation
+        # of an existing viability sheet (forking a new draft from a
+        # past version or upstream FWS). The plain CanEdit fallback
+        # keeps legacy roles working until they're granted the new flag.
+        if not ctx.has_permission(MENU, "CanRegenerateViability"):
+            require_permission(MENU, "CanEdit", ctx)
         quotation = _get_quotation_or_403(db, quot_id, ctx)
         fws_snap_id = body.sourcedFromFWSSnapshotId if body is not None else None
         viab_snap_id = body.sourcedFromViabilitySnapshotId if body is not None else None

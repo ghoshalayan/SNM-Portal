@@ -36,6 +36,14 @@ export interface MenuPermissionMap {
     canUnlockEditPO: boolean;
     canUnlockEditViability: boolean;
     canUnlockEditAnnexure: boolean;
+    // Phase 1A — LOI / Cycle CR flags.
+    canCaptureLOI: boolean;
+    canStartNewCycle: boolean;
+    // Post-Convert Approve + Regenerate per stage.
+    canApproveFWS: boolean;
+    canRegenerateFWS: boolean;
+    canRegenerateViability: boolean;
+    canRegenerateAnnexure: boolean;
   };
 }
 
@@ -89,6 +97,14 @@ export class MenuService {
             canUnlockEditPO: p.canUnlockEditPO || false,
             canUnlockEditViability: p.canUnlockEditViability || false,
             canUnlockEditAnnexure: p.canUnlockEditAnnexure || false,
+            // Phase 1A — LOI / Cycle CR flags.
+            canCaptureLOI: p.canCaptureLOI || false,
+            canStartNewCycle: p.canStartNewCycle || false,
+            // Post-Convert Approve + Regenerate per stage.
+            canApproveFWS: p.canApproveFWS || false,
+            canRegenerateFWS: p.canRegenerateFWS || false,
+            canRegenerateViability: p.canRegenerateViability || false,
+            canRegenerateAnnexure: p.canRegenerateAnnexure || false,
           };
         }
       }),

@@ -548,7 +548,8 @@ export interface VersionEntry {
                   (versionPicked)="onFwsVersionPicked($event)">
 
                   <div *ngIf="purchaseOrder && activeCycleSelected" class="fws-toolbar">
-                    <button mat-stroked-button color="primary"
+                    <button *ngIf="canRegenerateFWS"
+                            mat-stroked-button color="primary"
                             (click)="regenerateFws()"
                             [disabled]="fwsApproving || fwsSwitching || fwsRegenerating"
                             matTooltip="Re-generate the cycle's Final Working Sheet from a past FWS version, quotation lines, or a parent cycle. Unlocks the editor.">
@@ -611,6 +612,7 @@ export interface VersionEntry {
                   *ngIf="quotationId && showViabilityCard()"
                   [quotId]="quotationId"
                   [canApprove]="canApprove"
+                  [canRegenerate]="canRegenerateViability"
                   [readOnly]="viabilityReadOnly"
                   [upstreamPoVersion]="purchaseOrder?.versionNo ?? null"
                   [resourcing]="resourcing"
@@ -660,6 +662,7 @@ export interface VersionEntry {
                   [cycleNo]="selectedCycleNo"
                   [canApprove]="canApprove"
                   [canApproveAnnexure]="canApproveAnnexure"
+                  [canRegenerate]="canRegenerateAnnexure"
                   [readOnly]="isLocked"
                   [upstreamQuotationVersion]="versionNo || 1"
                   [upstreamPoVersion]="purchaseOrder?.versionNo ?? null"
@@ -1183,6 +1186,13 @@ export class QuotationFormComponent implements OnInit {
    *  approve button AND lets the holder edit annexures even after
    *  they're approved. */
   canApproveAnnexure = false;
+  /** Post-Convert Approve + Regenerate per stage. Each falls back to
+   *  the broader CanApprove / CanEdit until legacy roles are granted
+   *  the dedicated flag. */
+  canApproveFWS = false;
+  canRegenerateFWS = false;
+  canRegenerateViability = false;
+  canRegenerateAnnexure = false;
   currentOwnerUserId: number | null = null;
   isLocked = false;
   isMatured = false;
@@ -1374,7 +1384,7 @@ export class QuotationFormComponent implements OnInit {
    *  Re-generate to unlock + edit + Approve. */
   get fwsShellCta(): StagePrimaryCta | null {
     if (!this.purchaseOrder) return null;
-    if (!this.canApprove || !this.activeCycleSelected) return null;
+    if (!this.canApproveFWS || !this.activeCycleSelected) return null;
     const cycle = this.cycles.find(
       c => c.quotOrderCycleId === this.selectedCycleId,
     );
@@ -1518,6 +1528,16 @@ export class QuotationFormComponent implements OnInit {
     // Unlock-and-Edit has NO legacy fallback — privileged users only.
     this.canUnlockEditQuotation = this.menuService.hasPermission('Quotations', 'canUnlockEditQuotation');
     this.canUnlockEditPO = this.menuService.hasPermission('Quotations', 'canUnlockEditPO');
+    // Post-Convert Approve + Regenerate per stage. Falls back to the
+    // broader CanApprove / CanEdit while legacy roles are migrated.
+    this.canApproveFWS = this.menuService.hasPermission('Quotations', 'canApproveFWS')
+      || this.menuService.hasPermission('Quotations', 'canApprove');
+    this.canRegenerateFWS = this.menuService.hasPermission('Quotations', 'canRegenerateFWS')
+      || this.menuService.hasPermission('Quotations', 'canEdit');
+    this.canRegenerateViability = this.menuService.hasPermission('Quotations', 'canRegenerateViability')
+      || this.menuService.hasPermission('Quotations', 'canEdit');
+    this.canRegenerateAnnexure = this.menuService.hasPermission('Quotations', 'canRegenerateAnnexure')
+      || this.menuService.hasPermission('Quotations', 'canEdit');
     this.buildForm();
     this.loadDropdowns();
 

@@ -55,3 +55,14 @@ class RoleMenuMap(Base, AuditMixin):
     # a single trust boundary ("can decide when the call-off chain
     # progresses"). Typically HOD+ only.
     CanStartNewCycle = Column(Boolean, default=False, nullable=False)
+
+    # ---- Post-Convert lifecycle approve + regenerate flags ----
+    # Dedicated gates so each stage's Approve and Re-generate actions
+    # can be granted independently — the legacy ``CanApprove`` and
+    # ``CanEdit`` flags were overloaded and conflated stage-level intent.
+    # New roles should be granted these explicitly; legacy roles fall
+    # back to ``CanApprove``/``CanEdit`` until migrated.
+    CanApproveFWS = Column(Boolean, default=False, nullable=False)
+    CanRegenerateFWS = Column(Boolean, default=False, nullable=False)
+    CanRegenerateViability = Column(Boolean, default=False, nullable=False)
+    CanRegenerateAnnexure = Column(Boolean, default=False, nullable=False)

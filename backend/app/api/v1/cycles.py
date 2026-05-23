@@ -408,7 +408,10 @@ def regenerate_fws_endpoint(
     from app.models.quot_order_cycle import QuotOrderCycle
     from app.services import po_working_sheet_service
     try:
-        require_permission(MENU, "CanEdit", ctx)
+        # CanRegenerateFWS is the dedicated gate; legacy roles fall
+        # back to CanEdit until granted the new flag explicitly.
+        if not ctx.has_permission(MENU, "CanRegenerateFWS"):
+            require_permission(MENU, "CanEdit", ctx)
         _get_quotation_or_403(db, quot_id, ctx)
         cycle = _get_cycle_or_404(db, quot_id, cycle_id)
 
@@ -524,7 +527,10 @@ def approve_cycle_fws(
     """
     from sqlalchemy.exc import IntegrityError
     try:
-        require_permission(MENU, "CanApprove", ctx)
+        # CanApproveFWS is the dedicated gate; legacy roles fall back
+        # to the broader CanApprove until granted the new flag.
+        if not ctx.has_permission(MENU, "CanApproveFWS"):
+            require_permission(MENU, "CanApprove", ctx)
         _get_quotation_or_403(db, quot_id, ctx)
         cycle = _get_cycle_or_404(db, quot_id, cycle_id)
         try:
