@@ -9,10 +9,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from kpi_studio import deps
+from kpi_studio.api import call_logs as call_logs_api
 from kpi_studio.api import chat as chat_api
 from kpi_studio.api import dashboards as dashboards_api
+from kpi_studio.api import eval as eval_api
+from kpi_studio.api import jobs as jobs_api
 from kpi_studio.api import kpis as kpis_api
 from kpi_studio.api import nl as nl_api
+from kpi_studio.api import providers as providers_api
 from kpi_studio.api import schema as schema_api
 from kpi_studio.api import settings as settings_api
 from kpi_studio.config import KpiStudioConfig
@@ -47,5 +51,15 @@ def create_router(config: KpiStudioConfig) -> APIRouter:
     router.include_router(dashboards_api.build_router(), prefix="/dashboards")
     router.include_router(nl_api.build_router(), prefix="/nl")
     router.include_router(settings_api.build_router(), prefix="/settings")
+    # Multi-provider sub-router. Mounted under /settings/providers so the
+    # admin UI's "Providers" tab is a logical sub-resource of settings.
+    router.include_router(providers_api.build_router(),
+                          prefix="/settings/providers")
+    # Read-only observability — every outbound LLM HTTP call recorded
+    # with full request/response JSON, grouped by correlation_id.
+    router.include_router(call_logs_api.build_router(),
+                          prefix="/settings/call-logs")
     router.include_router(chat_api.build_router(), prefix="/chat")
+    router.include_router(eval_api.build_router(), prefix="/eval")
+    router.include_router(jobs_api.build_router(), prefix="/jobs")
     return router

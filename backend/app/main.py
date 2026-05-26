@@ -148,5 +148,29 @@ def _mount_kpi_studio(app: FastAPI) -> None:
         flush=True,
     )
 
+    # T-003 — start the in-process scheduler in this worker process.
+    # Imports here (not at top) so kpi_studio's deps.bind_config() has
+    # already run via create_kpi_router above. The scheduler reads
+    # KPI_SCHEDULER_ENABLED to no-op in tests or in multi-worker
+    # deployments where only one worker should own the schedule. The
+    # scheduled_jobs import has the side-effect of registering every
+    # declared job; ordering matters — registration must precede start.
+    from kpi_studio.services import scheduler as kpi_scheduler
+    from kpi_studio.services import scheduled_jobs  # noqa: F401 — register side-effect
+
+    @app.on_event("startup")
+    def _start_kpi_scheduler() -> None:
+        try:
+            kpi_scheduler.start_scheduler()
+        except Exception as exc:
+            # Scheduler failures must not break the API. A degraded
+            # scheduler still surfaces in the admin UI's run history
+            # (no recent runs = visible problem).
+            print(f"[kpi_studio] scheduler start failed: {exc}", flush=True)
+
+    @app.on_event("shutdown")
+    def _stop_kpi_scheduler() -> None:
+        kpi_scheduler.shutdown_scheduler()
+
 
 app = create_app()

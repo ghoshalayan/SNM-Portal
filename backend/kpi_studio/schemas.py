@@ -808,6 +808,14 @@ class DashboardDecorateResponse(BaseModel):
 KEEP_API_KEY = "__KEEP__"
 
 
+class StageDefinition(BaseModel):
+    """T-902: one row in the per-stage routing matrix the UI renders."""
+    key: str
+    label: str
+    description: str
+    built: bool
+
+
 class SettingsResponse(BaseModel):
     """Returned by ``GET /settings``. Never includes the API key — only
     a flag so the UI can show "set" vs "not set"."""
@@ -822,6 +830,24 @@ class SettingsResponse(BaseModel):
     # the agent's system prompt on every chat turn.
     domain_knowledge: Optional[str] = None
 
+    # T-901: OpenRouter extras (sent as HTTP headers when provider == 'openrouter').
+    openrouter_referer: Optional[str] = None
+    openrouter_app_name: Optional[str] = None
+
+    # T-902 + multi-provider refactor: per-stage routing values can be
+    # legacy strings OR {provider_config_id, model} objects.
+    stage_models: Optional[dict[str, Any]] = None
+    default_stage_model: Optional[str] = None
+    # Stage taxonomy — echoed so the UI doesn't need a separate fetch
+    # to know which stage rows to render. Stable across requests; the
+    # frontend can cache it if it wants to.
+    stages: list[StageDefinition] = Field(default_factory=list)
+    # Resolved (effective) model per stage, after the
+    # stage_models → default_stage_model → openai_model fallback chain.
+    # The UI uses this to show "what would run today" alongside the
+    # user's editable assignment.
+    effective_stage_models: dict[str, str] = Field(default_factory=dict)
+
     # Effective values (after DB→env→default resolution) — what the
     # backend actually uses right now. Helps the UI show the user what
     # will run if they don't change anything.
@@ -835,6 +861,14 @@ class SettingsResponse(BaseModel):
     # Whether the env var fallback is the one currently in use (i.e. no
     # DB row, or DB row's relevant column is NULL).
     using_env_fallback: bool = True
+
+    # 2026-05-25 — current state of the automatic-healthcheck switch.
+    # ``True`` (default) = PUT /settings runs probes + weekly job runs;
+    # ``False`` = save commits without probes + weekly job no-ops.
+    healthcheck_auto_enabled: bool = True
+    # 2026-05-25 — call-log subsystem state echo.
+    call_logging_enabled: bool = True
+    call_log_retention_days: int = 7
 
 
 class SettingsUpdate(BaseModel):
@@ -854,6 +888,33 @@ class SettingsUpdate(BaseModel):
     # to keep token budgets sane — the prompt is sent on every turn.
     domain_knowledge: Optional[str] = Field(default=None, max_length=32_000)
 
+    # T-901: OpenRouter extras. Same "None = leave alone, '' = clear"
+    # semantics as the other string fields.
+    openrouter_referer: Optional[str] = Field(default=None, max_length=500)
+    openrouter_app_name: Optional[str] = Field(default=None, max_length=200)
+
+    # T-902 + multi-provider refactor: per-stage routing supports
+    # legacy strings ("model-string") for backward compat AND the new
+    # object shape ({"provider_config_id": int, "model": str}) for
+    # explicit provider-config selection. Replace semantics — round-
+    # trip everything you want to keep.
+    stage_models: Optional[dict[str, Any]] = Field(default=None)
+    default_stage_model: Optional[str] = Field(default=None, max_length=200)
+
+    # T-004: bypass healthcheck refusal on save. Defaults False — a
+    # PUT that introduces a misconfigured model gets a 400. The admin
+    # can pass ``force=true`` to save anyway (audited).
+    force: bool = False
+
+    # 2026-05-25 — admin toggle for the automatic LLM-probe healthcheck.
+    # ``False`` => save commits without running probes AND the weekly
+    # scheduled probe job no-ops. Manual "Run health check" button
+    # still works. Cost kill switch.
+    healthcheck_auto_enabled: Optional[bool] = None
+    # 2026-05-25 — LLM call-log subsystem toggle + retention window.
+    call_logging_enabled: Optional[bool] = None
+    call_log_retention_days: Optional[int] = Field(default=None, ge=1, le=365)
+
 
 class SettingsTestRequest(BaseModel):
     """One-off test of the currently-configured provider — runs a tiny
@@ -867,6 +928,203 @@ class SettingsTestResponse(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     latency_ms: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# T-004 — Provider healthcheck
+# ---------------------------------------------------------------------------
+
+class HealthcheckProbe(BaseModel):
+    """One probe result. Keyed by the (provider, model) pair so the UI
+    can collapse duplicates — if two stages point at the same model
+    they share one probe."""
+    provider: str
+    model: str
+    ok: bool
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    # The stage keys that resolve to this (provider, model) pair —
+    # lets the UI render a "used by: preflight_planner, agent_default"
+    # subtitle on the result chip.
+    stages: list[str] = Field(default_factory=list)
+
+
+class HealthcheckResponse(BaseModel):
+    """Returned by ``POST /settings/healthcheck``.
+
+    ``overall_ok`` is True iff every probe returned ``ok=True``. When
+    ``cached`` is True the results are reused from the last on-startup
+    probe within the cache TTL — pass ``force=true`` to re-probe.
+    """
+    overall_ok: bool
+    cached: bool = False
+    checked_at: str
+    probes: list[HealthcheckProbe] = Field(default_factory=list)
+
+
+class HealthcheckRequest(BaseModel):
+    """Body for ``POST /settings/healthcheck``."""
+    force: bool = False
+
+
+# ---------------------------------------------------------------------------
+# LLM call log (observability, shipped 2026-05-25)
+# ---------------------------------------------------------------------------
+
+class CallLogSummary(BaseModel):
+    """One row in the Call log tab's list view. Bodies omitted to keep
+    list responses cheap — fetch the detail endpoint for full JSON."""
+    call_log_id: int
+    correlation_id: Optional[str] = None
+    trigger_source: str
+    trigger_ref_kind: Optional[str] = None
+    trigger_ref_id: Optional[int] = None
+    user_id: Optional[int] = None
+    provider_config_id: Optional[int] = None
+    provider_kind: str
+    provider_label: Optional[str] = None
+    base_url: str
+    model: str
+    stage_key: Optional[str] = None
+    response_status: Optional[int] = None
+    succeeded: bool
+    error: Optional[str] = None
+    latency_ms: int
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    started_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class CallLogDetail(CallLogSummary):
+    """Full detail — same fields as summary plus the request + response
+    bodies (capped at 64KB per side; truncated flags surfaced)."""
+    request_method: str
+    request_path: str
+    request_body: Optional[str] = None
+    request_headers: Optional[str] = None
+    request_truncated: bool
+    response_body: Optional[str] = None
+    response_truncated: bool
+
+
+class CallLogListResponse(BaseModel):
+    items: list[CallLogSummary]
+    total: int
+    next_cursor: Optional[int] = None
+
+
+class CallLogCorrelationResponse(BaseModel):
+    """All log rows sharing one correlation_id, oldest first. Used by
+    the UI's 'show siblings' affordance to see the full LLM trace of
+    one user-facing operation."""
+    correlation_id: str
+    items: list[CallLogDetail]
+
+
+# ---------------------------------------------------------------------------
+# Multi-provider config (refactor of T-901+T-902, shipped 2026-05-25)
+# ---------------------------------------------------------------------------
+
+class ProviderConfigPayload(BaseModel):
+    """Returned by ``GET /settings/providers``. Never carries the raw
+    API key — only the ``has_api_key`` flag."""
+    provider_config_id: int
+    kind: str
+    display_name: str
+    base_url: Optional[str] = None
+    has_api_key: bool
+    is_active: bool
+    description: Optional[str] = None
+    openrouter_referer: Optional[str] = None
+    openrouter_app_name: Optional[str] = None
+    # Admin-entered per-provider default model. Used by stage routing
+    # when a stage row leaves Model blank.
+    default_model: str = ""
+    # 2026-05-25: single-default flag. Exactly one provider in the
+    # system has this True; the stage-routing fallback uses that
+    # provider's ``default_model``.
+    is_default: bool = False
+
+
+class ProviderConfigListResponse(BaseModel):
+    items: list[ProviderConfigPayload]
+    total: int
+    kinds: list[str] = Field(default_factory=list)
+
+
+class ProviderConfigCreate(BaseModel):
+    kind: str = Field(..., max_length=40)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    api_key: str = Field(..., min_length=1)
+    # 2026-05-25: per-provider default model is now required at create
+    # time so stage routing can fall back to a known value when a
+    # stage row leaves Model blank. UI pre-fills from KIND_DEFAULTS
+    # the moment the admin picks a kind.
+    default_model: str = Field(..., min_length=1, max_length=200)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+    openrouter_referer: Optional[str] = Field(default=None, max_length=500)
+    openrouter_app_name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
+    # When True, this provider becomes the system default at create
+    # time (any previous default is automatically demoted). The very
+    # first provider is auto-promoted regardless so the resolver
+    # always has a fallback target.
+    is_default: bool = False
+
+
+class ProviderConfigUpdate(BaseModel):
+    """PUT body. ``api_key`` uses the same KEEP sentinel as legacy
+    settings — pass ``KEEP_API_KEY`` to leave the stored value alone."""
+    kind: Optional[str] = Field(default=None, max_length=40)
+    display_name: Optional[str] = Field(default=None, max_length=200)
+    api_key: str = Field(default=KEEP_API_KEY)
+    # ``None`` = leave alone. Cannot be set to an empty string — the
+    # service raises a 400 because a blank default model breaks the
+    # stage-routing fallback.
+    default_model: Optional[str] = Field(default=None, max_length=200)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+    openrouter_referer: Optional[str] = Field(default=None, max_length=500)
+    openrouter_app_name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
+    is_active: Optional[bool] = None
+    # ``True`` promotes this provider; ``False`` demotes (next active
+    # provider is auto-promoted so the system always has a default);
+    # ``None`` leaves the flag alone.
+    is_default: Optional[bool] = None
+
+
+class ProviderTestRequest(BaseModel):
+    """``POST /settings/providers/{id}/test`` body. ``model`` lets the
+    UI test a specific stage-routing model; None uses the provider's
+    default for its kind."""
+    model: Optional[str] = Field(default=None, max_length=200)
+
+
+class ProviderTestResponse(BaseModel):
+    """Returned by per-provider test. Shows enough detail for a
+    diagnostic ('which model did we send', 'how long did it take',
+    'what came back') without leaking the API key."""
+    provider_config_id: int
+    display_name: str
+    kind: str
+    base_url: Optional[str] = None
+    model_used: str
+    ok: bool
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    # Echo the model the API responded with — different from
+    # ``model_used`` when the provider normalises / routes. OpenRouter
+    # often echoes the upstream model name; this is how the admin
+    # confirms the request actually reached OpenRouter (not OpenAI
+    # via a stale fallback).
+    response_model: Optional[str] = None
+    # Short preview of the response text (first 80 chars). Helps
+    # confirm the round-trip is reaching the intended provider.
+    response_preview: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -954,3 +1212,193 @@ class ChatTurnResponse(BaseModel):
     reply. The frontend appends both to its rendered message list."""
     user_message: ChatMessage
     assistant_message: ChatMessage
+
+
+# ---------------------------------------------------------------------------
+# Eval harness (T-001)
+# ---------------------------------------------------------------------------
+# Golden test cases for the NL→SQL agent and per-run reports. Detailed
+# semantics live in ``kpi_studio.models.KpiEvalCase`` and
+# ``kpi_studio.eval.runner``; these are just the wire shapes.
+
+
+class EvalCaseCreate(BaseModel):
+    """POST body for ``POST /eval/cases``."""
+    name: str = Field(..., min_length=1, max_length=200)
+    prompt: str = Field(..., min_length=1)
+    expected_tables: Optional[list[str]] = None
+    expected_columns: Optional[list[str]] = None
+    expected_row_count_min: Optional[int] = Field(None, ge=0)
+    expected_row_count_max: Optional[int] = Field(None, ge=0)
+    golden_sql: Optional[str] = None
+    strict_tables: bool = False
+    tags: Optional[list[str]] = None
+    pinned_snapshot_id: Optional[int] = None
+
+
+class EvalCaseUpdate(BaseModel):
+    """PUT body for ``PUT /eval/cases/{id}``. All fields optional."""
+    name: Optional[str] = None
+    prompt: Optional[str] = None
+    expected_tables: Optional[list[str]] = None
+    expected_columns: Optional[list[str]] = None
+    expected_row_count_min: Optional[int] = None
+    expected_row_count_max: Optional[int] = None
+    golden_sql: Optional[str] = None
+    strict_tables: Optional[bool] = None
+    tags: Optional[list[str]] = None
+    is_active: Optional[bool] = None
+    pinned_snapshot_id: Optional[int] = None
+
+
+class EvalCasePayload(BaseModel):
+    """Returned by case GETs."""
+    case_id: int
+    name: str
+    prompt: str
+    expected_tables: Optional[list[str]] = None
+    expected_columns: Optional[list[str]] = None
+    expected_row_count_min: Optional[int] = None
+    expected_row_count_max: Optional[int] = None
+    golden_sql: Optional[str] = None
+    strict_tables: bool
+    tags: Optional[list[str]] = None
+    is_active: bool
+    last_pass_at: Optional[str] = None
+    last_fail_reason: Optional[str] = None
+    pinned_snapshot_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EvalCaseListResponse(BaseModel):
+    items: list[EvalCasePayload]
+    total: int
+
+
+class EvalRunRequest(BaseModel):
+    """POST body for ``POST /eval/runs``. All fields optional."""
+    tags: Optional[list[str]] = None
+    case_ids: Optional[list[int]] = None
+    against_snapshot_id: Optional[int] = None
+
+
+class EvalCaseResultPayload(BaseModel):
+    """Per-case outcome inside a run, returned by ``GET /eval/runs/{id}``."""
+    result_id: int
+    case_id: int
+    status: str
+    produced_sql: Optional[str] = None
+    produced_row_count: Optional[int] = None
+    tables_referenced: Optional[list[str]] = None
+    columns_referenced: Optional[list[str]] = None
+    failure_reasons: Optional[list[str]] = None
+    failure_detail: Optional[dict] = None
+    duration_ms: Optional[int] = None
+    tokens_used: Optional[int] = None
+    nl_run_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EvalRunPayload(BaseModel):
+    """Run-level summary. Returned by ``GET /eval/runs`` (list) and
+    ``GET /eval/runs/{id}`` (detail, with embedded ``results``)."""
+    eval_run_id: int
+    started_at: str
+    finished_at: Optional[str] = None
+    triggered_by: str
+    tags_filter: Optional[list[str]] = None
+    snapshot_id: Optional[int] = None
+    prompt_version: Optional[str] = None
+    cases_total: int
+    cases_passed: int
+    cases_failed: int
+    cases_errored: int
+    cases_skipped: int
+    pass_rate: float
+    summary_json: Optional[dict] = None
+    results: Optional[list[EvalCaseResultPayload]] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EvalRunListResponse(BaseModel):
+    items: list[EvalRunPayload]
+    total: int
+
+
+# ---------------------------------------------------------------------------
+# Scheduler (T-003)
+# ---------------------------------------------------------------------------
+# Wire shapes for /jobs/* admin endpoints. Jobs themselves are declared
+# in code (services.scheduler.register), so there's no CRUD — just
+# read-only listing + a Run-now trigger.
+
+
+class JobTriggerInfo(BaseModel):
+    """Human-readable summary of the APScheduler trigger.
+
+    The raw trigger types differ between interval / cron; this is a
+    flattened representation the admin UI can render uniformly. The
+    ``next_fire_at`` field is best-effort (only set when the scheduler
+    is running and the job is attached)."""
+    kind: str  # "interval" | "cron" | "unknown"
+    interval_seconds: Optional[int] = None
+    cron_expression: Optional[str] = None
+    next_fire_at: Optional[str] = None
+
+
+class ScheduledJobPayload(BaseModel):
+    """One registered job. Returned by ``GET /jobs``."""
+    name: str
+    description: str
+    enabled: bool
+    trigger: JobTriggerInfo
+    # Latest run summary — populated by the API handler via a small
+    # JOIN against KpiScheduledJobRun so the list page doesn't N+1
+    # query for last-run metadata.
+    last_run_id: Optional[int] = None
+    last_run_status: Optional[str] = None
+    last_run_started_at: Optional[str] = None
+    last_run_finished_at: Optional[str] = None
+    last_run_duration_ms: Optional[int] = None
+
+
+class ScheduledJobListResponse(BaseModel):
+    items: list[ScheduledJobPayload]
+    total: int
+    scheduler_active: bool
+
+
+class ScheduledJobRunPayload(BaseModel):
+    """One execution row from kpi_scheduled_job_run."""
+    run_id: int
+    job_name: str
+    trigger_source: str
+    triggered_by_user_id: Optional[int] = None
+    status: str
+    error: Optional[str] = None
+    items_processed: Optional[int] = None
+    duration_ms: Optional[int] = None
+    started_at: str
+    finished_at: Optional[str] = None
+    detail_json: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ScheduledJobRunListResponse(BaseModel):
+    items: list[ScheduledJobRunPayload]
+    total: int
+
+
+class ScheduledJobTriggerResponse(BaseModel):
+    """Returned by ``POST /jobs/{name}/trigger``."""
+    run_id: int
+    job_name: str
+    status: str

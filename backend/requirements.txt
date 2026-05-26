@@ -44,3 +44,9 @@ python-dotenv==1.0.1
 
 ## dashboard
 sqlglot==25.34.0
+
+# KPI Studio — T-003 scheduler. In-process BackgroundScheduler powers
+# the registered jobs surface; no external broker needed. Pinned at a
+# 3.x release for the BackgroundScheduler + IntervalTrigger / CronTrigger
+# API kpi_studio.services.scheduler relies on.
+apscheduler==3.10.4

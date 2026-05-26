@@ -65,4 +65,22 @@ export const KPI_STUDIO_ROUTES: Routes = [
       import('./pages/chat/chat.component')
         .then(m => m.ChatPageComponent),
   },
+
+  // Eval harness admin (T-001). SuperAdmin only — backend gated to
+  // kpi:settings and the menu entry is hidden by the has-permission
+  // directive for everyone else.
+  {
+    path: 'eval',
+    loadComponent: () =>
+      import('./pages/eval/eval-page.component')
+        .then(m => m.EvalPageComponent),
+  },
+
+  // Scheduled jobs admin (T-003). SuperAdmin only — same gate as eval.
+  {
+    path: 'jobs',
+    loadComponent: () =>
+      import('./pages/jobs/jobs-page.component')
+        .then(m => m.JobsPageComponent),
+  },
 ];

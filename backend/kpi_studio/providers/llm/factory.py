@@ -44,7 +44,46 @@ _OPENAI_COMPAT_DEFAULTS = {
         "model_env": "KPI_OLLAMA_CLOUD_MODEL",
         "base_url_env": "KPI_OLLAMA_CLOUD_BASE_URL",
     },
+    # T-901 — OpenRouter. One key, ~200 models behind ``model`` strings like
+    # ``anthropic/claude-3.5-sonnet`` / ``openai/gpt-4o`` /
+    # ``google/gemini-flash-1.5``. Recommends two extra HTTP headers for
+    # routing fairness + analytics: ``HTTP-Referer`` and ``X-Title``.
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "model_default": "anthropic/claude-3.5-sonnet",
+        "key_env": "KPI_OPENROUTER_API_KEY",
+        "model_env": "KPI_OPENROUTER_MODEL",
+        "base_url_env": "KPI_OPENROUTER_BASE_URL",
+        # Optional — surface these in extra HTTP headers when set.
+        "referer_env": "KPI_OPENROUTER_REFERER",
+        "app_name_env": "KPI_OPENROUTER_APP_NAME",
+    },
 }
+
+
+def _build_openai_compat(
+    selected: str,
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+    referer: Optional[str] = None,
+    app_name: Optional[str] = None,
+):
+    """Construct an OpenAICompatibleProvider with the right extra
+    headers for the chosen provider. Centralised so both the env-bootstrap
+    path (``build_provider_from_env``) and the DB-settings path (used by
+    ``build_provider_for_stage``) produce identical providers."""
+    extras: dict[str, str] = {}
+    if selected == "openrouter":
+        if referer:
+            extras["HTTP-Referer"] = referer
+        if app_name:
+            extras["X-Title"] = app_name
+    return OpenAICompatibleProvider(
+        api_key=api_key, model=model, base_url=base_url, name=selected,
+        extra_headers=(extras or None),
+    )
 
 
 def build_provider_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[LlmProvider]:
@@ -69,8 +108,12 @@ def build_provider_from_env(env: Optional[Mapping[str, str]] = None) -> Optional
             return None
         model = (env.get(cfg["model_env"]) or cfg["model_default"]).strip()
         base_url = (env.get(cfg["base_url_env"]) or cfg["base_url"]).strip()
-        return OpenAICompatibleProvider(
-            api_key=api_key, model=model, base_url=base_url, name=selected,
+        referer = (env.get(cfg.get("referer_env", "")) or "").strip() or None
+        app_name = (env.get(cfg.get("app_name_env", "")) or "").strip() or None
+        return _build_openai_compat(
+            selected,
+            api_key=api_key, model=model, base_url=base_url,
+            referer=referer, app_name=app_name,
         )
 
     # Azure OpenAI / Foundry / Gemini land here in later phases.

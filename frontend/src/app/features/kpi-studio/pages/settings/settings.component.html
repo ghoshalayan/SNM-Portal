@@ -6,9 +6,8 @@
         KPI Studio · Settings
       </h1>
       <p class="hint">
-        Manage the LLM provider, API key, and agent caps. Stored values
-        override the matching <code>KPI_*</code> env vars; leave a field
-        blank to fall back to env / default.
+        Manage LLM providers, per-stage routing, agent caps, and the
+        domain knowledge prompt. Each tab focuses on one concern.
       </p>
     </div>
   </header>
@@ -19,187 +18,412 @@
                          (retry)="load()"
                          (dismiss)="loadError.set(null)" />
 
-  <ng-container *ngIf="settings() as s">
-    <!-- Effective-state summary chips so the user can see what's actually running. -->
-    <section class="effective">
-      <div class="eff-header">
-        <strong>Currently in effect</strong>
-        <mat-chip *ngIf="isUsingEnvFallback()" class="eff-chip env" disabled>
-          using env fallback
-        </mat-chip>
-        <mat-chip *ngIf="!isUsingEnvFallback() && effectiveHasKey()" class="eff-chip db" disabled>
-          using DB settings
-        </mat-chip>
-        <mat-chip *ngIf="!effectiveHasKey()" class="eff-chip none" disabled>
-          no provider configured
-        </mat-chip>
-      </div>
-      <ul class="eff-list">
-        <li><span>Provider:</span> {{ s.effective_provider || '— none —' }}</li>
-        <li><span>Model:</span> {{ s.effective_model || '— none —' }}</li>
-        <li><span>API key:</span> {{ effectiveHasKey() ? '✓ set' : '✗ missing' }}</li>
-        <li><span>Token budget:</span> {{ s.effective_token_budget }}</li>
-        <li><span>Max iterations:</span> {{ s.effective_max_iterations }}</li>
-        <li><span>Max tokens / call:</span> {{ s.effective_max_tokens_per_call }}</li>
+  <!-- Persistent rollback banner. Toasts disappear in 5s and the
+       failure detail (which model 404'd, which key was rejected, etc.)
+       is exactly what the admin needs to read. Stays until they fix
+       it + save successfully, or dismiss. -->
+  <section *ngIf="rollbackError() as rb" class="rollback-banner">
+    <mat-icon class="rb-icon">error_outline</mat-icon>
+    <div class="rb-body">
+      <strong>Save rolled back.</strong>
+      The provider health check rejected {{ rb.failures.length }} probe(s),
+      so the previous configuration is still in effect.
+      <ul class="rb-failures">
+        <li *ngFor="let f of rb.failures">{{ f }}</li>
       </ul>
-    </section>
-
-    <!-- Provider config -->
-    <section class="card">
-      <h2>Provider</h2>
-
-      <mat-form-field appearance="outline" class="full">
-        <mat-label>Provider</mat-label>
-        <mat-select [value]="providerField()" (valueChange)="providerField.set($event)">
-          <mat-option [value]="''">— Use env / disabled —</mat-option>
-          <mat-option value="openai">OpenAI</mat-option>
-          <mat-option value="cerebras">Cerebras (OpenAI-compat)</mat-option>
-          <mat-option value="ollama_cloud">Ollama Cloud (OpenAI-compat)</mat-option>
-        </mat-select>
-        <mat-hint>
-          Selecting a value writes a row to the DB. Empty falls back to
-          the <code>KPI_LLM_PROVIDER</code> env var.
-        </mat-hint>
-      </mat-form-field>
-
-      <mat-form-field appearance="outline" class="full">
-        <mat-label>API key</mat-label>
-        <input matInput
-               [type]="revealKey() ? 'text' : 'password'"
-               [ngModel]="apiKeyField()"
-               (ngModelChange)="onApiKeyInput($event)"
-               autocomplete="off"
-               [placeholder]="s.has_api_key ? 'Stored key (hidden — type to overwrite)' : 'sk-…'">
-        <button mat-icon-button matSuffix
-                type="button"
-                (click)="toggleReveal()"
-                [matTooltip]="revealKey() ? 'Hide' : 'Reveal what you typed'">
-          <mat-icon>{{ revealKey() ? 'visibility_off' : 'visibility' }}</mat-icon>
-        </button>
-        <mat-hint>
-          <ng-container *ngIf="s.has_api_key && !apiKeyTouched()">
-            ✓ Key is set. Type a new value to overwrite, or
-            <a (click)="clearApiKey()" class="clear-link">clear it</a>.
-          </ng-container>
-          <ng-container *ngIf="!s.has_api_key && !apiKeyTouched()">
-            No key stored. Falls back to the env var.
-          </ng-container>
-          <ng-container *ngIf="apiKeyTouched() && apiKeyField()">
-            New key will be saved on next "Save".
-          </ng-container>
-          <ng-container *ngIf="apiKeyTouched() && !apiKeyField()">
-            ⚠ Saving will <strong>clear</strong> the stored key.
-          </ng-container>
-        </mat-hint>
-      </mat-form-field>
-
-      <div class="row">
-        <mat-form-field appearance="outline" class="grow">
-          <mat-label>Model</mat-label>
-          <input matInput
-                 [ngModel]="modelField()"
-                 (ngModelChange)="modelField.set($event)"
-                 placeholder="gpt-4o-mini">
-          <mat-hint>e.g. gpt-4o-mini, llama-3.3-70b — depends on provider.</mat-hint>
-        </mat-form-field>
-        <mat-form-field appearance="outline" class="grow">
-          <mat-label>Base URL (optional)</mat-label>
-          <input matInput
-                 [ngModel]="baseUrlField()"
-                 (ngModelChange)="baseUrlField.set($event)"
-                 placeholder="https://api.openai.com/v1">
-        </mat-form-field>
+      <div class="rb-hint">
+        Common causes:
+        <strong>404 from OpenRouter</strong> = the model string isn't in
+        OpenRouter's catalog (use the <code>vendor/model</code> form like
+        <code>anthropic/claude-3.5-sonnet</code>);
+        <strong>401</strong> = the API key was rejected;
+        <strong>5xx</strong> = upstream outage (try again).
+        Fix the failing stage in the matrix below and Save, or click
+        <strong>Save anyway</strong> at the bottom to override.
       </div>
+    </div>
+    <button mat-icon-button (click)="dismissRollbackBanner()" matTooltip="Dismiss">
+      <mat-icon>close</mat-icon>
+    </button>
+  </section>
 
-      <button mat-stroked-button color="primary"
-              (click)="test()"
-              [disabled]="testing() || !effectiveHasKey()">
-        <mat-icon>cell_tower</mat-icon>
-        {{ testing() ? 'Testing…' : 'Test connection' }}
-      </button>
+  <ng-container *ngIf="settings() as s">
+    <mat-tab-group [(selectedIndex)]="$any(activeTab)" animationDuration="200ms">
 
-      <div *ngIf="testResult() as t"
-           class="test-result"
-           [class.ok]="t.ok"
-           [class.fail]="!t.ok">
-        <mat-icon>{{ t.ok ? 'check_circle' : 'error_outline' }}</mat-icon>
-        <div>
-          <strong>{{ t.ok ? 'Success' : 'Failed' }}</strong>
-          <p>{{ t.message }}</p>
-          <p *ngIf="t.ok" class="meta">
-            {{ t.provider }} · {{ t.model }} · {{ t.latency_ms }}ms
-          </p>
+      <!-- ================== PROVIDERS ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">cloud_sync</mat-icon>
+          Providers ({{ providers().length }})
+        </ng-template>
+        <div class="tab-body">
+          <div class="tab-toolbar">
+            <div>
+              <strong>Configured LLM providers</strong>
+              <div class="hint-sm">
+                Add as many as you need. Per-stage routing in the next
+                tab picks which provider + model to use for each
+                pipeline call.
+              </div>
+            </div>
+            <button mat-raised-button color="primary" (click)="openAddProvider()">
+              <mat-icon>add</mat-icon> Add provider
+            </button>
+          </div>
+
+          <div *ngIf="noProviders()" class="empty">
+            <mat-icon>cloud_off</mat-icon>
+            <p>No providers configured yet.</p>
+            <button mat-stroked-button color="primary" (click)="openAddProvider()">
+              Add your first provider
+            </button>
+          </div>
+
+          <div class="provider-grid">
+            <mat-card *ngFor="let p of providers()" class="provider-card"
+                      [class.is-inactive]="!p.is_active">
+              <div class="provider-head">
+                <div class="provider-title">
+                  <mat-icon class="provider-icon">cloud</mat-icon>
+                  <div>
+                    <strong>{{ p.display_name }}</strong>
+                    <div class="provider-kind">
+                      <span class="kind-pill">{{ kindLabel(p.kind) }}</span>
+                      <span *ngIf="p.is_default" class="default-pill"
+                            matTooltip="System default. Stages with no per-stage provider fall back to this one.">
+                        default
+                      </span>
+                      <span *ngIf="!p.is_active" class="inactive-pill">inactive</span>
+                    </div>
+                  </div>
+                </div>
+                <button mat-icon-button [matTooltip]="'Edit'"
+                        (click)="openEditProvider(p)">
+                  <mat-icon>edit</mat-icon>
+                </button>
+              </div>
+
+              <dl class="provider-meta">
+                <dt>API key</dt>
+                <dd>{{ p.has_api_key ? '✓ stored' : '⚠ missing' }}</dd>
+                <dt>Base URL</dt>
+                <dd class="mono">{{ p.base_url || '(kind default)' }}</dd>
+                <dt>Default model</dt>
+                <dd class="mono">{{ p.default_model || '—' }}</dd>
+                <ng-container *ngIf="p.kind === 'openrouter'">
+                  <dt>HTTP-Referer</dt>
+                  <dd class="mono">{{ p.openrouter_referer || '—' }}</dd>
+                  <dt>X-Title</dt>
+                  <dd class="mono">{{ p.openrouter_app_name || '—' }}</dd>
+                </ng-container>
+                <ng-container *ngIf="p.description">
+                  <dt>Note</dt>
+                  <dd>{{ p.description }}</dd>
+                </ng-container>
+              </dl>
+
+              <div class="provider-actions">
+                <button mat-stroked-button color="primary"
+                        (click)="testProvider(p)"
+                        [disabled]="!p.has_api_key || !!testing()[p.provider_config_id]">
+                  <mat-spinner *ngIf="testing()[p.provider_config_id]"
+                               diameter="14" class="cta-spinner"></mat-spinner>
+                  <mat-icon *ngIf="!testing()[p.provider_config_id]">cell_tower</mat-icon>
+                  Test connection
+                </button>
+                <button *ngIf="!p.is_default && p.is_active"
+                        mat-button color="accent"
+                        (click)="makeDefault(p)"
+                        matTooltip="Promote this provider to system default. The current default is demoted automatically.">
+                  Make default
+                </button>
+                <button mat-button (click)="toggleProviderActive(p)">
+                  {{ p.is_active ? 'Deactivate' : 'Activate' }}
+                </button>
+                <button mat-button color="warn" (click)="confirmDeleteProvider(p)">
+                  Delete
+                </button>
+              </div>
+            </mat-card>
+          </div>
         </div>
-      </div>
-    </section>
+      </mat-tab>
 
-    <!-- Agent caps -->
-    <section class="card">
-      <h2>Agent caps</h2>
-      <p class="card-hint">
-        Per-run limits. Leaving any field blank uses the matching
-        <code>KPI_NL_*</code> env var, then the compile-time default.
-      </p>
+      <!-- ================== STAGE ROUTING ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">tune</mat-icon>
+          Stage routing
+        </ng-template>
+        <div class="tab-body">
+          <div class="tab-toolbar">
+            <div>
+              <strong>Per-stage provider + model</strong>
+              <div class="hint-sm">
+                Pick a provider and a model for each pipeline stage. Leave a
+                provider blank to use the default; leave both blank to use the
+                fallback at the bottom.
+              </div>
+            </div>
+            <button mat-stroked-button color="primary"
+                    (click)="runHealthcheck(true)"
+                    [disabled]="checking()">
+              <mat-icon>{{ checking() ? 'hourglass_top' : 'health_and_safety' }}</mat-icon>
+              {{ checking() ? 'Probing…' : 'Run health check' }}
+            </button>
+          </div>
 
-      <div class="row">
-        <mat-form-field appearance="outline" class="grow">
-          <mat-label>Token budget (per agent run)</mat-label>
-          <input matInput type="number" min="100" max="10000000"
-                 [ngModel]="tokenBudgetField()"
-                 (ngModelChange)="tokenBudgetField.set($event)">
-          <mat-hint>Default: 50,000. Aborts cleanly when exceeded.</mat-hint>
-        </mat-form-field>
-        <mat-form-field appearance="outline" class="grow">
-          <mat-label>Max iterations</mat-label>
-          <input matInput type="number" min="1" max="50"
-                 [ngModel]="maxIterationsField()"
-                 (ngModelChange)="maxIterationsField.set($event)">
-          <mat-hint>Default: 8. Tool-call rounds before giving up.</mat-hint>
-        </mat-form-field>
-        <mat-form-field appearance="outline" class="grow">
-          <mat-label>Max tokens / call</mat-label>
-          <input matInput type="number" min="100" max="200000"
-                 [ngModel]="maxTokensPerCallField()"
-                 (ngModelChange)="maxTokensPerCallField.set($event)">
-          <mat-hint>Default: 4,000. Per-call output cap.</mat-hint>
-        </mat-form-field>
-      </div>
-    </section>
+          <div *ngIf="activeProviders().length === 0" class="empty">
+            <mat-icon>warning</mat-icon>
+            <p>No active providers. Add one in the <strong>Providers</strong>
+              tab before routing stages.</p>
+          </div>
 
-    <!-- System Knowledge Hub — admin-curated business context appended
-         to the chatbot agent's system prompt on every turn. -->
-    <section class="card">
-      <h2>
-        <mat-icon class="title-icon">menu_book</mat-icon>
-        System Knowledge Hub
-      </h2>
-      <p class="card-hint">
-        Plain-text business context the agent reads <em>before</em>
-        exploring the schema. Use it to teach the LLM what your domain
-        terms mean — what a "parent code" is, who an "owner" or
-        "reportTo" is, how location mapping cascades, the lifecycle of an
-        Enquiry and a Quotation (Draft → Approved → Matured → Viability
-        → Annexure), what state a record can move to next, etc.
-        <br>
-        The agent is read-only by design: SQL safety blocks every
-        DELETE / UPDATE / INSERT / EXEC, so you can paste freely without
-        worrying about the model "doing" anything.
-      </p>
+          <div class="stage-matrix" *ngIf="activeProviders().length > 0">
+            <div *ngFor="let row of stageRows()" class="stage-row"
+                 [class.is-future]="!row.built"
+                 [class.is-failing]="isStageFailing(row.key)">
+              <div class="stage-info">
+                <div class="stage-label">
+                  {{ row.label }}
+                  <span *ngIf="!row.built" class="future-pill">future</span>
+                </div>
+                <div class="stage-desc">{{ row.description }}</div>
+                <div *ngIf="isStageFailing(row.key)" class="stage-failure">
+                  <mat-icon>warning</mat-icon>
+                  {{ stageFailureDetail(row.key) || 'Probe failed — see Health tab.' }}
+                </div>
+              </div>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic"
+                              class="stage-provider">
+                <mat-label>Provider</mat-label>
+                <mat-select [value]="row.providerConfigId"
+                            (valueChange)="onStageProviderChange(row.key, $event)">
+                  <mat-option [value]="null">— Default (fallback) —</mat-option>
+                  <mat-option *ngFor="let p of activeProviders()"
+                              [value]="p.provider_config_id">
+                    {{ p.display_name }} ({{ kindLabel(p.kind) }})
+                  </mat-option>
+                </mat-select>
+              </mat-form-field>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic"
+                              class="stage-input">
+                <mat-label>Model</mat-label>
+                <input matInput
+                       [ngModel]="row.model"
+                       (ngModelChange)="onStageModelChange(row.key, $event)"
+                       [placeholder]="effectiveStageModel(row.key) || 'inherit default'">
+              </mat-form-field>
+              <div class="stage-health" *ngIf="stageHealth()[row.key] as h"
+                   [class.ok]="h.ok"
+                   [class.fail]="!h.ok"
+                   [matTooltip]="h.error || (h.latency + 'ms')">
+                <mat-icon>{{ h.ok ? 'check_circle' : 'error_outline' }}</mat-icon>
+                <span *ngIf="h.ok && h.latency !== null">{{ h.latency }}ms</span>
+                <span *ngIf="!h.ok">failed</span>
+              </div>
+            </div>
 
-      <mat-form-field appearance="outline" class="full">
-        <mat-label>Domain knowledge (markdown-friendly)</mat-label>
-        <textarea matInput
-                  rows="14"
-                  maxlength="32000"
-                  [ngModel]="domainKnowledgeField()"
-                  (ngModelChange)="onDomainKnowledgeInput($event)"
-                  placeholder="e.g.&#10;# Entities&#10;- Customer → Enquiry → Quotation → Quotation Detail (line items)&#10;# Ownership&#10;- Each Enquiry/Quotation has an ownerUserId; the user's reportTo chain controls visibility (F5 hierarchy filter)&#10;# Quotation lifecycle&#10;- Draft → Approved → Matured (PO received) → ViabilityGenerated → ViabilityApproved → AnnexureGenerated → AnnexureApproved&#10;- 'Reject' and 'Revised' are terminal side-states&#10;# Location mapping&#10;- Each user maps to states/districts; F6 filters records by site state/dist&#10;..."></textarea>
-        <mat-hint align="end">
-          {{ domainKnowledgeField().length }} / 32000
-          <span *ngIf="domainKnowledgeTouched()"> · unsaved</span>
-        </mat-hint>
-      </mat-form-field>
-    </section>
+            <div class="stage-row default-row">
+              <div class="stage-info">
+                <div class="stage-label">Default model (fallback)</div>
+                <div class="stage-desc">
+                  Used when a stage above leaves both Provider and Model
+                  blank. The provider used is the most-recently-active
+                  (or the legacy single-provider config carried forward
+                  by the migration).
+                </div>
+              </div>
+              <div class="default-spacer"></div>
+              <mat-form-field appearance="outline" subscriptSizing="dynamic"
+                              class="stage-input">
+                <mat-label>Default model</mat-label>
+                <input matInput
+                       [ngModel]="defaultStageModelField()"
+                       (ngModelChange)="defaultStageModelField.set($event)"
+                       placeholder="anthropic/claude-3.5-sonnet">
+              </mat-form-field>
+            </div>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- ================== AGENT CAPS ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">tune</mat-icon>
+          Agent caps
+        </ng-template>
+        <div class="tab-body">
+          <p class="hint-sm">
+            Per-run limits. Leaving any field blank uses the matching
+            <code>KPI_NL_*</code> env var, then the compile-time default.
+          </p>
+          <div class="row">
+            <mat-form-field appearance="outline" class="grow">
+              <mat-label>Token budget (per agent run)</mat-label>
+              <input matInput type="number" min="100" max="10000000"
+                     [ngModel]="tokenBudgetField()"
+                     (ngModelChange)="tokenBudgetField.set($event)">
+              <mat-hint>Default: 50,000.</mat-hint>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="grow">
+              <mat-label>Max iterations</mat-label>
+              <input matInput type="number" min="1" max="50"
+                     [ngModel]="maxIterationsField()"
+                     (ngModelChange)="maxIterationsField.set($event)">
+              <mat-hint>Default: 8.</mat-hint>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="grow">
+              <mat-label>Max tokens / call</mat-label>
+              <input matInput type="number" min="100" max="200000"
+                     [ngModel]="maxTokensPerCallField()"
+                     (ngModelChange)="maxTokensPerCallField.set($event)">
+              <mat-hint>Default: 4,000.</mat-hint>
+            </mat-form-field>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- ================== DOMAIN KNOWLEDGE ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">menu_book</mat-icon>
+          Domain knowledge
+        </ng-template>
+        <div class="tab-body">
+          <p class="hint-sm">
+            Plain-text business context the agent reads before exploring the
+            schema. Teach it what a "parent code" is, what the quotation
+            lifecycle looks like, how location mapping cascades, etc.
+          </p>
+          <mat-form-field appearance="outline" class="full">
+            <mat-label>Domain knowledge (markdown-friendly)</mat-label>
+            <textarea matInput rows="18" maxlength="32000"
+                      [ngModel]="domainKnowledgeField()"
+                      (ngModelChange)="onDomainKnowledgeInput($event)"
+                      placeholder="# Entities&#10;- Customer → Enquiry → Quotation → Quotation Detail&#10;# Ownership&#10;- Each record has an ownerUserId; the reportTo chain controls visibility&#10;# Quotation lifecycle&#10;- Draft → Approved → Matured → Viability → Annexure"></textarea>
+            <mat-hint align="end">
+              {{ domainKnowledgeField().length }} / 32000
+              <span *ngIf="domainKnowledgeTouched()"> · unsaved</span>
+            </mat-hint>
+          </mat-form-field>
+        </div>
+      </mat-tab>
+
+      <!-- ================== HEALTH ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">health_and_safety</mat-icon>
+          Health
+        </ng-template>
+        <div class="tab-body">
+          <!-- Cost kill switch. Each probe is a billable LLM call;
+               for cost-conscious deployments the admin can disable
+               automatic probes entirely and only run them manually. -->
+          <section class="hc-toggle-card"
+                   [class.is-off]="!healthcheckAutoField()">
+            <div class="hc-toggle-info">
+              <mat-icon class="hc-toggle-icon">attach_money</mat-icon>
+              <div>
+                <strong>Automatic health check</strong>
+                <div class="hint-sm">
+                  Each probe is a real LLM call (1 token, ~1¢ per probe on
+                  most providers, but it accrues). When ON, probes run on
+                  every Settings save AND weekly via the scheduler. When OFF,
+                  saves commit without probes and the weekly job no-ops —
+                  use the <strong>Run health check</strong> button below when
+                  you want to verify.
+                </div>
+                <div class="hint-sm" *ngIf="!healthcheckAutoField()">
+                  <mat-icon class="warn-ico">warning</mat-icon>
+                  Saves will commit even when a model name is invalid; you
+                  won't know about a misconfigured stage until a real chat
+                  / agent call hits it. Trade-off for zero recurring cost.
+                </div>
+              </div>
+            </div>
+            <mat-slide-toggle
+              [checked]="healthcheckAutoField()"
+              (change)="healthcheckAutoField.set($event.checked)">
+              {{ healthcheckAutoField() ? 'On' : 'Off' }}
+            </mat-slide-toggle>
+          </section>
+
+          <div class="tab-toolbar">
+            <div>
+              <strong>Provider + stage health</strong>
+              <div class="hint-sm">
+                One probe per unique (provider, model) pair. Manual button
+                below is always available regardless of the auto-toggle.
+              </div>
+            </div>
+            <button mat-stroked-button color="primary"
+                    (click)="runHealthcheck(true)"
+                    [disabled]="checking()">
+              <mat-icon>{{ checking() ? 'hourglass_top' : 'refresh' }}</mat-icon>
+              {{ checking() ? 'Probing…' : 'Run health check' }}
+            </button>
+          </div>
+
+          <div *ngIf="healthcheck() as hc">
+            <div class="hc-summary"
+                 [class.is-ok]="hc.overall_ok"
+                 [class.is-fail]="!hc.overall_ok">
+              <mat-icon>{{ hc.overall_ok ? 'check_circle' : 'error_outline' }}</mat-icon>
+              <div>
+                {{ hc.overall_ok ? 'All probes succeeded.' : 'One or more probes failed.' }}
+                <span class="muted">Last checked {{ hc.checked_at }}{{ hc.cached ? ' (cached)' : '' }}.</span>
+              </div>
+            </div>
+
+            <table class="probe-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th class="num">Latency</th>
+                  <th>Stages</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let probe of hc.probes" [attr.data-ok]="probe.ok">
+                  <td>
+                    <span class="status-pill" [attr.data-ok]="probe.ok">
+                      {{ probe.ok ? 'OK' : 'FAIL' }}
+                    </span>
+                  </td>
+                  <td>{{ probe.provider }}</td>
+                  <td class="mono">{{ probe.model }}</td>
+                  <td class="num">{{ probe.latency_ms ?? '—' }}{{ probe.latency_ms != null ? 'ms' : '' }}</td>
+                  <td class="mono">
+                    {{ probe.stages.length ? probe.stages.join(', ') : '(unrouted)' }}
+                  </td>
+                  <td class="err">{{ probe.error || '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </mat-tab>
+
+      <!-- ================== CALL LOG ================== -->
+      <mat-tab>
+        <ng-template mat-tab-label>
+          <mat-icon class="tab-ico">receipt_long</mat-icon>
+          Call log
+        </ng-template>
+        <div class="tab-body">
+          <app-call-log-tab
+            [providers]="activeProviders()"
+            [settings]="s"
+            (settingsSaved)="onCallLogSettingsSaved($event)" />
+        </div>
+      </mat-tab>
+
+    </mat-tab-group>
 
     <footer class="actions">
       <button mat-flat-button color="primary"
@@ -207,6 +431,13 @@
               [disabled]="saving()">
         <mat-icon>save</mat-icon>
         Save changes
+      </button>
+      <button mat-stroked-button color="warn"
+              (click)="saveAnyway()"
+              [disabled]="saving()"
+              matTooltip="Save even if the provider health check failed.">
+        <mat-icon>warning</mat-icon>
+        Save anyway
       </button>
       <button mat-stroked-button (click)="load()" [disabled]="loading() || saving()">
         <mat-icon>refresh</mat-icon>

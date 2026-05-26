@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python -m unittest tests.kpi_studio.test_spec_compiler)",
-      "Bash(python -m unittest discover -s tests/kpi_studio)"
+      "Bash(python -m unittest discover -s tests/kpi_studio)",
+      "Bash(python -c ' *)"
     ]
   }
 }

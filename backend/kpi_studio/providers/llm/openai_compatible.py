@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Sequence
+from typing import Optional, Sequence
 
 import httpx
 
@@ -44,6 +44,18 @@ class OpenAICompatibleProvider(LlmProvider):
         # providers (Cerebras, Ollama Cloud) still expect ``max_tokens``.
         # When ``None`` we infer from ``name`` and auto-swap on error.
         max_tokens_field: str | None = None,
+        # Provider-specific extra HTTP headers (T-901). OpenRouter
+        # recommends ``HTTP-Referer`` + ``X-Title`` for analytics +
+        # better rate-limit fairness; other compats may have their own.
+        # Empty / None = send no extras (current behaviour for OpenAI /
+        # Cerebras / Ollama).
+        extra_headers: Optional[dict[str, str]] = None,
+        # Call-log identity metadata (2026-05-25). Passed when the
+        # provider is built from a ``KpiLlmProviderConfig`` row; the
+        # logger stamps these on every audit row so admins can filter
+        # by provider config in the UI. ``None`` when built from env.
+        provider_config_id: Optional[int] = None,
+        provider_label: Optional[str] = None,
     ) -> None:
         if not api_key:
             raise ValueError("api_key is required")
@@ -62,6 +74,9 @@ class OpenAICompatibleProvider(LlmProvider):
                 "max_completion_tokens" if name == "openai" else "max_tokens"
             )
         self._max_tokens_field = max_tokens_field
+        self._extra_headers = dict(extra_headers) if extra_headers else {}
+        self._provider_config_id = provider_config_id
+        self._provider_label = provider_label
 
     def complete(
         self,
@@ -213,32 +228,95 @@ class OpenAICompatibleProvider(LlmProvider):
 
     def _post(self, body: dict) -> tuple[dict, int]:
         """Shared POST → (parsed-json, latency_ms). Raises LlmProviderError
-        on non-2xx, malformed JSON, or transport failure."""
+        on non-2xx, malformed JSON, or transport failure.
+
+        Every round-trip is recorded to kpi_llm_call_log via call_logger.
+        Failures are recorded too — admin can inspect them in the
+        "Call log" tab without re-running the failing flow."""
+        from datetime import datetime, timezone
         url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            **self._extra_headers,
         }
+        started_at = datetime.now(timezone.utc)
         started = time.perf_counter()
+
+        # Mine the model from the request body — accurate per-call even
+        # when the same provider instance gets re-used for different
+        # models (which shouldn't happen today but the call-log should
+        # reflect what was actually sent).
+        request_model = (body.get("model") if isinstance(body, dict) else None) \
+            or self._model
+
+        def _record(*, succeeded: bool, status: Optional[int],
+                    response_body: Any, error: Optional[str]) -> None:
+            # Lazy import — call_logger pulls in deps which lazy-resolve
+            # the host's session factory; importing at module-load time
+            # creates an import cycle during tests.
+            from kpi_studio.services import call_logger
+            call_logger.record(
+                provider_kind=self.name,
+                provider_label=self._provider_label,
+                provider_config_id=self._provider_config_id,
+                base_url=self._base_url,
+                model=request_model,
+                request_method="POST",
+                request_path="/chat/completions",
+                request_body=body,
+                request_headers=headers,
+                response_status=status,
+                response_body=response_body,
+                succeeded=succeeded,
+                error=error,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                started_at=started_at,
+            )
+
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 resp = client.post(url, headers=headers, json=body)
         except httpx.TimeoutException as exc:
+            _record(succeeded=False, status=None, response_body=None,
+                    error=f"{type(exc).__name__}: request timed out")
             raise LlmProviderError(f"{self.name}: request timed out") from exc
         except httpx.HTTPError as exc:
+            _record(succeeded=False, status=None, response_body=None,
+                    error=f"{type(exc).__name__}: {exc}")
             raise LlmProviderError(f"{self.name}: HTTP error: {exc}") from exc
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         if resp.status_code >= 400:
             snippet = (resp.text or "")[:400]
+            _record(
+                succeeded=False,
+                status=resp.status_code,
+                response_body=resp.text,
+                error=f"{resp.status_code} {resp.reason_phrase}: {snippet}",
+            )
             raise LlmProviderError(
                 f"{self.name}: {resp.status_code} {resp.reason_phrase}: {snippet}"
             )
 
         try:
-            return resp.json(), latency_ms
+            parsed = resp.json()
         except json.JSONDecodeError as exc:
+            _record(
+                succeeded=False,
+                status=resp.status_code,
+                response_body=resp.text,
+                error="response was not JSON",
+            )
             raise LlmProviderError(f"{self.name}: response was not JSON") from exc
+
+        _record(
+            succeeded=True,
+            status=resp.status_code,
+            response_body=parsed,
+            error=None,
+        )
+        return parsed, latency_ms
 
 
 def _serialize_message(m: LlmMessage) -> dict:

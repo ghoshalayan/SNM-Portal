@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from kpi_studio import deps
 from kpi_studio.models import KpiNlRun
+from kpi_studio.services import call_logger, knowledge_versions
 from kpi_studio.providers.llm.base import LlmProviderError
 from kpi_studio.schemas import (
     KpiSuggestionItem, KpiSuggestRequest, KpiSuggestResponse,
@@ -73,6 +74,7 @@ def _audit(
     """Best-effort audit write — never raises (audit failure must not
     break the user's request)."""
     try:
+        fp = knowledge_versions.current(db)
         db.add(KpiNlRun(
             company_id=_company_id(user),
             user_id=_user_id(user),
@@ -88,6 +90,7 @@ def _audit(
             total_tokens=total_tokens,
             duration_ms=duration_ms,
             steps=steps,
+            **fp.as_kwargs(),
         ))
         db.commit()
     except Exception:
@@ -168,9 +171,26 @@ def build_router() -> APIRouter:
         if mode not in ("agent", "single"):
             raise HTTPException(status_code=400, detail=f"Unknown mode: {mode!r}")
 
-        if mode == "single":
-            return _run_single(payload, schema_payload, provider, db, user, cfg)
-        return _run_agent(payload, schema_payload, provider, db, user, cfg, eff)
+        # T-902: route single-shot + agent paths through their stages so
+        # per-stage routing applies to /nl/generate the same way it does
+        # to the chat endpoint. Single-shot path doesn't have a clean
+        # stage today (it IS the entire NL→SQL surface), so it falls
+        # under STAGE_AGENT_DEFAULT.
+        from kpi_studio.stages import STAGE_AGENT_DEFAULT
+        agent_provider = settings_service.provider_for_stage(
+            eff, STAGE_AGENT_DEFAULT) or provider
+
+        # Open call-log correlation so every LLM call fired by this
+        # /nl/generate request shows up as one group in the admin UI.
+        with call_logger.log_context(
+            trigger_source="nl_generate",
+            user_id=_user_id(user),
+            company_id=_company_id(user),
+            stage_key=STAGE_AGENT_DEFAULT,
+        ):
+            if mode == "single":
+                return _run_single(payload, schema_payload, agent_provider, db, user, cfg)
+            return _run_agent(payload, schema_payload, agent_provider, db, user, cfg, eff)
 
     @router.post(
         "/suggest-kpis",

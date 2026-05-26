@@ -49,6 +49,15 @@ _OPENAI_DEFAULTS = {
         "model_env": "KPI_OLLAMA_CLOUD_MODEL",
         "base_url_env": "KPI_OLLAMA_CLOUD_BASE_URL",
     },
+    # T-901 — OpenRouter. One key, many models behind ``model`` strings
+    # like ``anthropic/claude-3.5-sonnet`` / ``openai/gpt-4o``.
+    "openrouter": {
+        "model": "anthropic/claude-3.5-sonnet",
+        "base_url": "https://openrouter.ai/api/v1",
+        "key_env": "KPI_OPENROUTER_API_KEY",
+        "model_env": "KPI_OPENROUTER_MODEL",
+        "base_url_env": "KPI_OPENROUTER_BASE_URL",
+    },
 }
 
 
@@ -75,6 +84,13 @@ class EffectiveSettings:
     preflight_enabled: bool = True
     preflight_max_rounds: int = 5
     preflight_user_escalations: int = 2
+    # 2026-05-25 — cost kill-switch for automatic healthcheck probes.
+    # Default True for back-compat; admins flip off via the Health tab
+    # when LLM-probe billing is a concern.
+    healthcheck_auto_enabled: bool = True
+    # 2026-05-25 — LLM call-log toggle + retention window.
+    call_logging_enabled: bool = True
+    call_log_retention_days: int = 7
     # Phase B2 — how many of the most recent (user, assistant) message
     # pairs to feed back into the agent on each chat turn so it can
     # follow up "now group that by region" / "and only for last
@@ -82,6 +98,17 @@ class EffectiveSettings:
     # now; KpiSettings DB column can be added later if admins want a
     # UI toggle.
     chat_history_turns: int = 3
+    # T-901: OpenRouter extras. Only sent as HTTP headers when the
+    # provider is "openrouter"; ignored otherwise.
+    openrouter_referer: Optional[str] = None
+    openrouter_app_name: Optional[str] = None
+    # T-902: Per-stage model routing. ``stage_models`` is the raw map
+    # from KpiSettings (or None); ``default_stage_model`` is the
+    # fallback when a stage isn't in the map. ``provider_for_stage()``
+    # is the convenience builder that combines them with the resolved
+    # provider/key/base_url.
+    stage_models: Optional[dict[str, str]] = None
+    default_stage_model: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +156,54 @@ def update_row(
     # Domain knowledge — None = leave alone; "" = clear; anything else = save.
     if payload.domain_knowledge is not None:
         row.domain_knowledge = (payload.domain_knowledge.strip() or None)
+
+    # T-901: OpenRouter extras.
+    if payload.openrouter_referer is not None:
+        row.openrouter_referer = (payload.openrouter_referer.strip() or None)
+    if payload.openrouter_app_name is not None:
+        row.openrouter_app_name = (payload.openrouter_app_name.strip() or None)
+
+    # 2026-05-25 — automatic-healthcheck kill switch.
+    if payload.healthcheck_auto_enabled is not None:
+        row.healthcheck_auto_enabled = bool(payload.healthcheck_auto_enabled)
+
+    # 2026-05-25 — LLM call-log kill switch + retention.
+    if payload.call_logging_enabled is not None:
+        row.call_logging_enabled = bool(payload.call_logging_enabled)
+    if payload.call_log_retention_days is not None:
+        row.call_log_retention_days = max(1, min(365, int(payload.call_log_retention_days)))
+
+    # T-902 + multi-provider refactor: stage routing supports two
+    # entry shapes:
+    #   * legacy string:   "anthropic/claude-3.5-sonnet"
+    #   * new object:      {"provider_config_id": 3, "model": "..."}
+    # Empty / blank entries (in either shape) get dropped — they mean
+    # "no override; fall through to default_stage_model → eff.model".
+    if payload.stage_models is not None:
+        cleaned: dict = {}
+        for k, v in payload.stage_models.items():
+            if not isinstance(k, str):
+                continue
+            if isinstance(v, str):
+                vs = v.strip()
+                if vs:
+                    cleaned[k] = vs
+            elif isinstance(v, dict):
+                cid = v.get("provider_config_id")
+                model = (v.get("model") or "").strip() if v.get("model") else ""
+                # Keep the row when EITHER side is set so the resolver
+                # can fall through cleanly. An entry with neither is
+                # equivalent to absence; drop it.
+                if isinstance(cid, int) or model:
+                    entry: dict = {}
+                    if isinstance(cid, int):
+                        entry["provider_config_id"] = cid
+                    if model:
+                        entry["model"] = model
+                    cleaned[k] = entry
+        row.stage_models = cleaned if cleaned else None
+    if payload.default_stage_model is not None:
+        row.default_stage_model = (payload.default_stage_model.strip() or None)
 
     row.updated_by = updated_by
     db.commit()
@@ -210,14 +285,28 @@ def get_effective(
         DEFAULT_MAX_TOKENS_PER_CALL,
     )
 
+    # T-901: OpenRouter extras. DB-only — env equivalent isn't worth a
+    # new var when the admin can just paste into the UI.
+    openrouter_referer = (row.openrouter_referer or "").strip() if row else ""
+    openrouter_app_name = (row.openrouter_app_name or "").strip() if row else ""
+
     provider: Optional[LlmProvider] = None
     if provider_name and api_key and model and base_url:
-        provider = OpenAICompatibleProvider(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
+        provider = _build_provider(
             name=provider_name.lower(),
+            api_key=api_key, model=model, base_url=base_url,
+            openrouter_referer=openrouter_referer or None,
+            openrouter_app_name=openrouter_app_name or None,
         )
+
+    # T-902: per-stage routing map + default fallback.
+    stage_models: Optional[dict[str, str]] = None
+    if row and row.stage_models:
+        stage_models = {
+            k: v for k, v in row.stage_models.items()
+            if isinstance(k, str) and isinstance(v, str) and v.strip()
+        } or None
+    default_stage_model = (row.default_stage_model or "").strip() if row else ""
 
     domain_knowledge = (row.domain_knowledge or "").strip() if row else ""
 
@@ -252,6 +341,29 @@ def get_effective(
     )
     chat_history_turns = max(0, min(10, chat_history_turns))
 
+    # Healthcheck-auto kill switch (2026-05-25). Same resolution as
+    # preflight: explicit DB value wins; otherwise read env; default
+    # True for back-compat with deployments that haven't seen the
+    # column yet.
+    if row and row.healthcheck_auto_enabled is not None:
+        hc_auto = bool(row.healthcheck_auto_enabled)
+    else:
+        env_hc = (env.get("KPI_HEALTHCHECK_AUTO_ENABLED") or "").strip().lower()
+        hc_auto = env_hc not in ("0", "false", "no", "off")
+
+    # Call-logging kill switch — same DB > env > default(True) pattern.
+    if row and row.call_logging_enabled is not None:
+        call_log_on = bool(row.call_logging_enabled)
+    else:
+        env_cl = (env.get("KPI_CALL_LOGGING_ENABLED") or "").strip().lower()
+        call_log_on = env_cl not in ("0", "false", "no", "off")
+    call_log_days = _pick_int(
+        row.call_log_retention_days if row else None,
+        env.get("KPI_CALL_LOG_RETENTION_DAYS"),
+        7,
+    )
+    call_log_days = max(1, min(365, call_log_days))
+
     return EffectiveSettings(
         provider=provider,
         provider_name=(provider_name or None),
@@ -266,7 +378,217 @@ def get_effective(
         preflight_max_rounds=pf_rounds,
         preflight_user_escalations=pf_escalations,
         chat_history_turns=chat_history_turns,
+        healthcheck_auto_enabled=hc_auto,
+        call_logging_enabled=call_log_on,
+        call_log_retention_days=call_log_days,
+        openrouter_referer=(openrouter_referer or None),
+        openrouter_app_name=(openrouter_app_name or None),
+        stage_models=stage_models,
+        default_stage_model=(default_stage_model or None),
     )
+
+
+# ---------------------------------------------------------------------------
+# T-902 — Per-stage provider builder
+# ---------------------------------------------------------------------------
+# Multi-provider semantics (2026-05-25 refactor):
+#
+# ``stage_models`` JSON entries can now be EITHER:
+#   * a string (legacy): ``"openai/gpt-4o-mini"`` — uses the single
+#     provider configured on KpiSettings.
+#   * an object (new):   ``{"provider_config_id": 3, "model": "openai/gpt-4o-mini"}``
+#     — instantiates the named provider config.
+#
+# ``resolve_stage_model`` returns the model string for either shape;
+# ``resolve_stage_provider_config_id`` returns the config id (or None
+# when the entry is legacy / unset).
+#
+# ``provider_for_stage`` consults provider_config_service when the
+# new shape is present and falls back to the legacy single-provider
+# path when it isn't.
+
+
+def _stage_entry(eff: EffectiveSettings, stage_key: str):
+    """Pull the raw stage entry (str / dict / None) from the routing map."""
+    if not eff.stage_models or not isinstance(eff.stage_models, dict):
+        return None
+    return eff.stage_models.get(stage_key)
+
+
+def resolve_stage_provider_config_id(
+    eff: EffectiveSettings, stage_key: str,
+) -> Optional[int]:
+    """Return the config id assigned to this stage, or None for legacy /
+    unset entries (which use the single-provider fallback)."""
+    entry = _stage_entry(eff, stage_key)
+    if isinstance(entry, dict):
+        cid = entry.get("provider_config_id")
+        if isinstance(cid, int):
+            return cid
+    return None
+
+
+def resolve_stage_model(
+    eff: EffectiveSettings, stage_key: str, *,
+    db: Optional[Session] = None,
+) -> Optional[str]:
+    """The model string that would be used for ``stage_key``.
+
+    Resolution order (first hit wins):
+
+    1. The stage entry's explicit ``model`` (per-stage override).
+    2. **2026-05-26**: when the stage entry picks a provider but leaves
+       model blank, use that provider config's ``default_model``. This
+       is what an admin expects when they pick "OpenRouter" for a
+       stage and leave Model blank — the provider already declared
+       which model it prefers; the global fallback shouldn't override
+       it. Requires ``db``; silently skipped when None.
+    3. The global ``default_stage_model`` (used when a stage has no
+       routing entry at all, or a legacy string entry that's blank).
+    4. The ``is_default=True`` provider config's ``default_model`` —
+       the system-wide fallback when nothing else is set. Requires
+       ``db``.
+    5. ``eff.model`` — legacy single-provider model.
+    """
+    entry = _stage_entry(eff, stage_key)
+    if isinstance(entry, dict):
+        m = (entry.get("model") or "").strip()
+        if m:
+            return m
+        cid = entry.get("provider_config_id")
+        if isinstance(cid, int) and db is not None:
+            from kpi_studio.services import provider_config_service
+            row = provider_config_service.get(db, cid)
+            if row is not None and (row.default_model or "").strip():
+                return row.default_model.strip()
+    elif isinstance(entry, str):
+        m = entry.strip()
+        if m:
+            return m
+    if eff.default_stage_model:
+        return eff.default_stage_model
+    if db is not None:
+        from kpi_studio.services import provider_config_service
+        default_row = provider_config_service.get_default(db)
+        if default_row is not None and (default_row.default_model or "").strip():
+            return default_row.default_model.strip()
+    return eff.model
+
+
+def provider_for_stage(
+    eff: EffectiveSettings,
+    stage_key: str,
+    *,
+    db: Optional[Session] = None,
+) -> Optional[LlmProvider]:
+    """Return an LlmProvider configured for a specific pipeline stage.
+
+    Resolution paths (first hit wins):
+
+    1. Stage has a ``provider_config_id`` → look it up via
+       ``provider_config_service``, build with the stage's model.
+       Requires ``db``; falls back if not supplied.
+    2. **2026-05-25**: stage has no per-stage provider → use the
+       system-default provider config (``is_default=True``) when one
+       exists. Model resolves to stage entry > ``default_stage_model``
+       > the default provider's ``default_model``.
+    3. Stage is in the legacy string format / unrouted → use the
+       legacy single-provider (``eff.provider``) with the stage's
+       model swapped in.
+
+    Returns None when nothing usable is configured.
+    """
+    chosen_model = resolve_stage_model(eff, stage_key, db=db) or eff.model
+    cid = resolve_stage_provider_config_id(eff, stage_key)
+
+    # ---- Path 1: explicit provider config ------------------------------
+    if cid is not None and db is not None:
+        from kpi_studio.services import provider_config_service
+        row = provider_config_service.get(db, cid)
+        if row is not None and row.is_active:
+            try:
+                return provider_config_service.build_provider(
+                    row, model=chosen_model,
+                )
+            except ValueError:
+                # Bad config (missing base_url / model) — fall through
+                # so the caller at least gets the legacy provider rather
+                # than a hard None.
+                pass
+
+    # ---- Path 2: system-default provider (2026-05-25) ------------------
+    # When a stage has no per-stage cid AND we have a DB session, prefer
+    # the explicit "is_default=True" row over the legacy single-provider
+    # path. This is what makes the new "Set as default" affordance the
+    # canonical fallback target without the admin having to repeat it
+    # on every stage row.
+    if db is not None:
+        from kpi_studio.services import provider_config_service
+        default_row = provider_config_service.get_default(db)
+        if default_row is not None and default_row.is_active:
+            # If the stage didn't supply a model AND no global
+            # default_stage_model is set, fall back to the default
+            # provider's own default_model — that's the whole point of
+            # storing it on the row.
+            model_for_call = chosen_model or (default_row.default_model or "").strip()
+            try:
+                return provider_config_service.build_provider(
+                    default_row, model=model_for_call,
+                )
+            except ValueError:
+                pass
+
+    # ---- Path 3: legacy single-provider fallback -----------------------
+    if eff.provider is None or not eff.has_key or not eff.provider_name:
+        return None
+    if not chosen_model:
+        return eff.provider  # nothing to swap, return the existing one as-is
+
+    default = eff.provider
+    return _build_provider(
+        name=eff.provider_name,
+        api_key=_extract_api_key(default),
+        model=chosen_model,
+        base_url=_extract_base_url(default),
+        openrouter_referer=eff.openrouter_referer,
+        openrouter_app_name=eff.openrouter_app_name,
+    )
+
+
+def _build_provider(
+    *,
+    name: str,
+    api_key: str,
+    model: str,
+    base_url: str,
+    openrouter_referer: Optional[str],
+    openrouter_app_name: Optional[str],
+) -> LlmProvider:
+    """Construct an OpenAICompatibleProvider with provider-specific
+    extra headers. Centralised so the env-bootstrap path, the stage
+    builder, and the healthcheck produce identical providers for the
+    same inputs."""
+    extras: dict[str, str] = {}
+    if name == "openrouter":
+        if openrouter_referer:
+            extras["HTTP-Referer"] = openrouter_referer
+        if openrouter_app_name:
+            extras["X-Title"] = openrouter_app_name
+    return OpenAICompatibleProvider(
+        api_key=api_key, model=model, base_url=base_url, name=name,
+        extra_headers=(extras or None),
+    )
+
+
+def _extract_api_key(provider: LlmProvider) -> str:
+    """Pull the API key off an OpenAICompatibleProvider. Internal —
+    only used by ``provider_for_stage`` to clone a provider with a
+    different model. Wrapped so future provider types can override."""
+    return getattr(provider, "_api_key", "")
+
+
+def _extract_base_url(provider: LlmProvider) -> str:
+    return getattr(provider, "_base_url", "")
 
 
 # ---------------------------------------------------------------------------

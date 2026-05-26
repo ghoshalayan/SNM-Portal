@@ -3,8 +3,227 @@
   flex-direction: column;
   gap: 16px;
   padding: 24px;
-  max-width: 920px;
+  max-width: 1100px;
   margin: 0 auto;
+}
+
+/* ---- Tab body shell ---- */
+.tab-body { padding: 16px 4px 4px; }
+.tab-ico {
+  font-size: 18px; width: 18px; height: 18px;
+  vertical-align: middle; margin-right: 6px;
+}
+.tab-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.hint-sm {
+  font-size: 12px; color: var(--snm-text-muted);
+  margin-top: 2px; max-width: 640px; line-height: 1.5;
+  code {
+    background: var(--snm-bg-panel); padding: 1px 4px;
+    border-radius: 3px; font-size: 11px;
+  }
+}
+.empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 40px 16px;
+  color: var(--snm-text-muted);
+  mat-icon { font-size: 38px; width: 38px; height: 38px; opacity: 0.55; }
+}
+
+/* ---- Providers tab ---- */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+}
+.provider-card {
+  padding: 14px;
+  display: flex; flex-direction: column;
+  gap: 10px;
+  &.is-inactive {
+    opacity: 0.6;
+    background: var(--snm-bg-panel);
+  }
+}
+.provider-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 8px;
+}
+.provider-title {
+  display: flex; gap: 10px; align-items: flex-start;
+  strong { font-size: 14px; color: var(--snm-text-primary); }
+}
+.provider-icon { color: var(--snm-accent); margin-top: 2px; }
+.provider-kind { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+.kind-pill {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(58,107,181,0.12); color: var(--snm-accent-dark);
+}
+.inactive-pill {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--snm-bg-panel); color: var(--snm-text-muted);
+}
+.default-pill {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.4px; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(46,125,50,0.18); color: #1b5e20;
+  border: 1px solid rgba(46,125,50,0.45);
+}
+
+dl.provider-meta {
+  display: grid; grid-template-columns: 110px 1fr;
+  column-gap: 8px; row-gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  dt {
+    color: var(--snm-text-muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.3px; font-size: 11px;
+  }
+  dd { margin: 0; color: var(--snm-text-primary); word-break: break-word; }
+  dd.mono { font-family: monospace; font-size: 11px; }
+}
+
+.provider-actions {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-top: 1px solid var(--snm-border-divider);
+  padding-top: 8px;
+}
+.cta-spinner { display: inline-block; margin-right: 6px; vertical-align: middle; }
+
+/* ---- Health tab probe table ---- */
+.probe-table {
+  width: 100%; border-collapse: collapse; margin-top: 12px;
+  background: var(--snm-bg-card);
+  border: 1px solid var(--snm-border-divider);
+  border-radius: 6px; overflow: hidden;
+  th, td {
+    padding: 8px 12px; text-align: left;
+    border-bottom: 1px solid var(--snm-border-divider);
+    font-size: 13px;
+  }
+  th {
+    background: var(--snm-bg-header-row);
+    color: var(--snm-text-secondary);
+    font-weight: 600; text-transform: uppercase;
+    font-size: 11px; letter-spacing: 0.3px;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.mono { font-family: monospace; font-size: 11px; }
+  td.err {
+    font-family: monospace; font-size: 11px; color: #c62828;
+    max-width: 320px;
+  }
+  tr[data-ok="false"] td:first-child { border-left: 3px solid #c62828; }
+  tr[data-ok="true"] td:first-child { border-left: 3px solid #2e7d32; }
+}
+.status-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  &[data-ok="true"] {
+    background: rgba(46,125,50,0.14); color: #2e7d32;
+  }
+  &[data-ok="false"] {
+    background: rgba(229,57,53,0.14); color: #c62828;
+  }
+}
+.default-spacer { flex: 0 0 200px; }
+
+/* Persistent rollback banner — re-added 2026-05-25 after the tabbed
+ * settings rewrite dropped it. The toast is too brief for "which
+ * model 404'd"; banner stays until dismissed or next successful save. */
+.rollback-banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: rgba(229, 57, 53, 0.10);
+  border: 1px solid var(--snm-error, #e53935);
+  border-left: 4px solid var(--snm-error, #e53935);
+  border-radius: 6px;
+  color: var(--snm-text-primary);
+
+  .rb-icon {
+    color: var(--snm-error, #e53935);
+    font-size: 28px; width: 28px; height: 28px;
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .rb-body { flex: 1; font-size: 13px; line-height: 1.5; }
+  .rb-failures {
+    margin: 6px 0 4px 0; padding-left: 20px;
+    font-family: monospace; font-size: 12px;
+    color: #c62828;
+    li { margin: 2px 0; word-break: break-word; }
+  }
+  .rb-hint {
+    margin-top: 6px; font-size: 12px;
+    color: var(--snm-text-secondary);
+    code {
+      background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px;
+      font-size: 11px;
+    }
+  }
+}
+
+/* Failing-stage row outline — admin can spot which routing row caused
+ * the rollback without parsing the banner failure list. */
+.stage-row.is-failing {
+  background: rgba(229, 57, 53, 0.05);
+  border: 1px solid rgba(229, 57, 53, 0.50);
+  border-left-width: 3px;
+}
+.stage-failure {
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 4px;
+  font-size: 11px; color: #c62828;
+  font-family: monospace;
+  mat-icon {
+    font-size: 14px; width: 14px; height: 14px;
+    color: #c62828;
+  }
+}
+
+/* Cost kill-switch card on the Health tab. Loud when off so the
+ * admin can see "I've turned probes off and accepted the trade-off". */
+.hc-toggle-card {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; flex-wrap: wrap;
+  padding: 14px 16px; margin-bottom: 14px;
+  background: var(--snm-bg-panel);
+  border: 1px solid var(--snm-border-divider);
+  border-radius: 8px;
+  border-left: 4px solid #2e7d32;
+
+  &.is-off {
+    border-left-color: var(--snm-accent-dark);
+    background: rgba(58, 107, 181, 0.04);
+  }
+}
+.hc-toggle-info {
+  display: flex; gap: 12px; align-items: flex-start;
+  flex: 1; min-width: 0;
+  strong {
+    font-size: 14px; color: var(--snm-text-primary);
+    display: block; margin-bottom: 2px;
+  }
+}
+.hc-toggle-icon {
+  color: #2e7d32; flex-shrink: 0;
+  font-size: 26px; width: 26px; height: 26px; margin-top: 2px;
+}
+.hc-toggle-card.is-off .hc-toggle-icon { color: var(--snm-accent-dark); }
+.hc-toggle-info .hint-sm { margin-top: 4px; }
+.warn-ico {
+  font-size: 13px; width: 13px; height: 13px;
+  color: rgba(160,110,0,0.95); vertical-align: middle;
+  margin-right: 2px;
 }
 
 .page-header {
@@ -131,4 +350,141 @@
 .actions {
   display: flex; gap: 8px;
   padding-top: 4px;
+}
+
+/* Fix B — persistent save-rollback banner. Loud red, dismiss-only. */
+.rollback-banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: rgba(229, 57, 53, 0.10);
+  border: 1px solid var(--snm-error, #e53935);
+  border-left: 4px solid var(--snm-error, #e53935);
+  border-radius: 6px;
+  color: var(--snm-text-primary);
+
+  .rb-icon {
+    color: var(--snm-error, #e53935);
+    font-size: 28px; width: 28px; height: 28px;
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .rb-body { flex: 1; font-size: 13px; line-height: 1.5; }
+  .rb-attempt {
+    margin: 4px 0;
+    code { background: rgba(0,0,0,0.06); padding: 1px 6px; border-radius: 4px; }
+  }
+  .rb-failures {
+    margin: 6px 0 4px 0; padding-left: 20px;
+    font-family: monospace; font-size: 12px;
+    color: #c62828;
+    li { margin: 2px 0; }
+  }
+  .rb-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--snm-text-secondary);
+    code {
+      background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px;
+      font-size: 11px;
+    }
+  }
+}
+
+/* Fix C — mismatch chip + section emphasis. */
+.effective.has-mismatch {
+  background: rgba(229, 57, 53, 0.04);
+  border: 1px solid rgba(229, 57, 53, 0.35);
+}
+.eff-chip.mismatch {
+  background: rgba(229, 57, 53, 0.15) !important;
+  color: #c62828 !important;
+  font-weight: 600;
+  mat-icon { font-size: 14px; width: 14px; height: 14px; vertical-align: middle; }
+}
+
+/* T-902 — per-stage routing matrix. Each row: label + description on the
+ * left, model input on the right, optional health pill at the end. */
+.stage-matrix {
+  display: flex; flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.stage-row {
+  display: grid;
+  grid-template-columns: 1fr 280px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--snm-bg-panel);
+  border: 1px solid var(--snm-border-divider);
+  border-radius: 6px;
+
+  &.is-future {
+    opacity: 0.6;
+    .stage-input { opacity: 0.55; pointer-events: none; }
+  }
+  &.default-row {
+    border-style: dashed;
+    background: transparent;
+  }
+}
+.stage-info { min-width: 0; }
+.stage-label {
+  font-weight: 600; font-size: 13px;
+  color: var(--snm-text-primary);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.future-pill {
+  font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--snm-bg-card); color: var(--snm-text-muted);
+}
+.stage-desc {
+  font-size: 11px; color: var(--snm-text-muted);
+  margin-top: 2px; line-height: 1.4;
+}
+.stage-input { margin: 0; }
+.stage-health {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+
+  &.ok {
+    background: rgba(46, 125, 50, 0.14); color: #2e7d32;
+  }
+  &.fail {
+    background: rgba(229, 57, 53, 0.14); color: #c62828;
+  }
+  mat-icon { font-size: 14px; width: 14px; height: 14px; }
+}
+
+.hc-button {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.hc-summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+
+  &.is-ok {
+    background: rgba(46, 125, 50, 0.08); color: #2e7d32;
+    border: 1px solid rgba(46, 125, 50, 0.4);
+  }
+  &.is-fail {
+    background: rgba(229, 57, 53, 0.08); color: #c62828;
+    border: 1px solid rgba(229, 57, 53, 0.4);
+  }
+  .muted { color: var(--snm-text-muted); margin-left: 6px; }
+}
+
+@media (max-width: 800px) {
+  .stage-row {
+    grid-template-columns: 1fr;
+  }
+  .stage-input { width: 100%; }
 }

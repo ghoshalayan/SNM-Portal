@@ -416,9 +416,26 @@ class KpiNlRun(KpiBase):
 
     started_at = Column(DateTime, nullable=False, default=_utcnow)
 
+    # ---- Knowledge fingerprint (T-002) -----------------------------------
+    # All four are nullable / soft-defaulted so existing rows aren't
+    # broken; the writer stamps them on every new insert via
+    # ``services.knowledge_versions.current()``. Pinning lets us
+    # correlate a quality regression with the exact prompt / glossary /
+    # exemplar / schema state that produced it — invaluable when
+    # something starts drifting after a deploy.
+    prompt_version = Column(String(20), nullable=True)
+    glossary_version = Column(String(40), nullable=True)
+    schema_snapshot_id = Column(
+        Integer,
+        ForeignKey("kpi_schema_snapshot.snapshot_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    exemplar_set_hash = Column(String(64), nullable=True)
+
     __table_args__ = (
         Index("ix_kpi_nl_run_company_started", "company_id", "started_at"),
         Index("ix_kpi_nl_run_user_started", "user_id", "started_at"),
+        Index("ix_kpi_nl_run_prompt_version", "prompt_version"),
     )
 
 
@@ -518,10 +535,26 @@ class KpiChatMessage(KpiBase):
 
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
+    # ---- Knowledge fingerprint (T-002) -----------------------------------
+    # Same shape as KpiNlRun — stamp the prompt / glossary / exemplar /
+    # schema-snapshot identity of the run that produced this message so
+    # historical turns can be correlated with the agent config in force
+    # at the time. Stamped only on assistant turns (user turns leave
+    # them null).
+    prompt_version = Column(String(20), nullable=True)
+    glossary_version = Column(String(40), nullable=True)
+    schema_snapshot_id = Column(
+        Integer,
+        ForeignKey("kpi_schema_snapshot.snapshot_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    exemplar_set_hash = Column(String(64), nullable=True)
+
     session = relationship("KpiChatSession", back_populates="messages")
 
     __table_args__ = (
         Index("ix_kpi_chat_message_session", "chat_session_id", "created_at"),
+        Index("ix_kpi_chat_message_prompt_version", "prompt_version"),
     )
 
 
@@ -629,8 +662,522 @@ class KpiSettings(KpiBase):
     preflight_max_rounds = Column(Integer, nullable=True)
     preflight_user_escalations = Column(Integer, nullable=True)
 
+    # ---- T-901: OpenRouter extras ----------------------------------------
+    # Two HTTP headers OpenRouter recommends for routing fairness +
+    # analytics. Only sent when ``llm_provider == 'openrouter'``. Both
+    # nullable; safe to leave blank.
+    openrouter_referer = Column(String(500), nullable=True)
+    openrouter_app_name = Column(String(200), nullable=True)
+
+    # ---- T-902: Per-stage model routing ----------------------------------
+    # JSON map of {stage_key: model_string}. Stages declared in
+    # ``kpi_studio.stages``. When a stage is missing, the resolver falls
+    # back to ``default_stage_model``; when that's also blank it falls
+    # back to ``openai_model``. All three null → factory default.
+    #
+    # Example payload:
+    #   {
+    #     "preflight_planner":  "anthropic/claude-3.5-sonnet",
+    #     "agent_default":      "anthropic/claude-3-opus",
+    #     "insight_generator":  "openai/gpt-4o-mini"
+    #   }
+    stage_models = Column(JSON, nullable=True)
+    default_stage_model = Column(String(200), nullable=True)
+
+    # 2026-05-25 — kill switch for automatic LLM probes (T-004).
+    # When False:
+    #   * PUT /settings does NOT run the healthcheck — saves commit
+    #     unconditionally, no rollback. This is the fix for "I keep
+    #     getting healthcheck_failed and can't save".
+    #   * The weekly ``provider_healthcheck`` scheduled job becomes a no-op.
+    #   * The manual "Run health check" button still works — explicit
+    #     user click = explicit cost choice.
+    # Nullable so existing rows default to "enabled" via the resolver;
+    # admins flip to False via the Health tab when probe billing is a
+    # concern (OpenRouter charges per request even for 1-token probes).
+    healthcheck_auto_enabled = Column(Boolean, nullable=True)
+
+    # 2026-05-25 — LLM call-log observability switch.
+    # When True (default), every outbound LLM HTTP call is recorded
+    # to kpi_llm_call_log (request body, response body, latency, etc.).
+    # API keys are masked before persist. Toggle off if storage cost
+    # is a concern (call_log_retention_days handles the recurring side
+    # via a scheduled prune).
+    call_logging_enabled = Column(Boolean, nullable=True)
+    # Days of call-log history to keep. The scheduled prune job
+    # deletes rows older than this. Default 7. Null = use default.
+    call_log_retention_days = Column(Integer, nullable=True)
+
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     updated_by = Column(Integer, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Multi-provider config (T-901+T-902 refactor, shipped 2026-05-25)
+# ---------------------------------------------------------------------------
+# Each row is one configured LLM provider — an admin can have several
+# coexist (e.g. one OpenRouter for production, one Cerebras for cheap
+# utility calls, one OpenAI for parity testing). Stage routing in
+# ``KpiSettings.stage_models`` then picks which config_id to use per
+# pipeline stage. The single-provider columns on KpiSettings stay as
+# the legacy fallback so unmigrated stages keep working.
+
+# Allowed provider ``kind`` values. Drives the protocol shim selection
+# in ``provider_config_service``.
+PROVIDER_KINDS = ("openai", "openrouter", "cerebras", "ollama_cloud", "azure_openai")
+
+
+class KpiLlmProviderConfig(KpiBase):
+    """One configured LLM provider.
+
+    Multiple rows are expected. ``kind`` picks the protocol shim;
+    ``display_name`` is the admin-set label shown in the stage-routing
+    dropdown and the providers tab card. ``api_key`` is plaintext —
+    same caveat as the legacy ``KpiSettings.openai_api_key`` column;
+    encrypt-at-rest follow-up tracked separately.
+    """
+    __tablename__ = "kpi_llm_provider_config"
+
+    provider_config_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # ``openai`` | ``openrouter`` | ``cerebras`` | ``ollama_cloud`` |
+    # ``azure_openai``. Validated server-side against PROVIDER_KINDS.
+    kind = Column(String(40), nullable=False)
+
+    # Admin-set label. Must be unique per company at the API edge.
+    # Examples: "Production OpenRouter", "Cerebras (cheap utility)",
+    # "OpenAI parity". Shown verbatim in the stage-routing dropdown.
+    display_name = Column(String(200), nullable=False)
+
+    # Plaintext API key. Plumbed write-only via the UI (KEEP sentinel on
+    # update; GET returns has_api_key boolean only).
+    api_key = Column(Text, nullable=False)
+
+    # Optional base URL override. NULL = use the factory default for the
+    # provider kind (e.g. https://api.openai.com/v1 for openai).
+    base_url = Column(String(500), nullable=True)
+
+    # OpenRouter-only extras — sent as HTTP headers when the kind is
+    # ``openrouter``; ignored otherwise. Stored on every row anyway so
+    # switching a row's kind doesn't drop them silently.
+    openrouter_referer = Column(String(500), nullable=True)
+    openrouter_app_name = Column(String(200), nullable=True)
+
+    # Soft delete. ``is_active=False`` removes the provider from
+    # stage-routing dropdowns + healthcheck enumeration but preserves
+    # history of which stages it was used by.
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # 2026-05-25: admin-entered default model string for this provider.
+    # Required at create time (UI pre-fills from KIND_DEFAULTS when the
+    # kind is picked, but the admin can edit before saving). Used by
+    # the resolver when a stage row is routed to this provider but
+    # leaves the per-stage Model field blank.
+    default_model = Column(String(200), nullable=True)
+
+    # 2026-05-25: single-default invariant. Exactly one provider config
+    # has is_default=True at any time. Stage routing falls back to this
+    # provider's ``default_model`` when a stage has no per-stage
+    # override AND ``KpiSettings.default_stage_model`` is blank.
+    # Service layer enforces "set one True → unset all others".
+    is_default = Column(Boolean, nullable=False, default=False)
+
+    # Free text. Future use: rate-limit notes, who owns the key, etc.
+    description = Column(String(500), nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    created_by = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    updated_by = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_kpi_provider_config_active", "is_active"),
+        Index("ix_kpi_provider_config_kind", "kind"),
+        Index("ix_kpi_provider_config_default", "is_default"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# LLM call log (observability, shipped 2026-05-25)
+# ---------------------------------------------------------------------------
+# One row per outbound LLM HTTP call. Captures the request body, the
+# response body, the model + provider + base URL, and a correlation_id
+# that groups all calls fired during one user-facing operation (chat
+# turn, /nl/generate run, eval case, healthcheck pass, etc.).
+#
+# Authorization headers are masked before persist by ``call_logger``.
+# Bodies are capped at 64 KB per side; ``request_truncated`` /
+# ``response_truncated`` flag rows that lost detail.
+
+# Allowed trigger_source values. Free-form on the column but enforced
+# by call_logger's call sites — surfacing a typo at code-review time
+# beats a typo silently breaking the admin UI filter.
+CALL_LOG_SOURCES = (
+    "chat",                 # chat_service.run_turn
+    "nl_generate",          # /nl/generate endpoint
+    "eval",                 # eval runner
+    "healthcheck_auto",     # scheduled provider_healthcheck job
+    "healthcheck_manual",   # admin clicked "Run health check"
+    "provider_test",        # admin clicked "Test connection" on a card
+    "settings_test",        # legacy /settings/test endpoint
+    "unknown",              # default when caller forgot to set
+)
+
+
+class KpiLlmCallLog(KpiBase):
+    """One LLM HTTP round-trip. Always inserted, success or failure."""
+    __tablename__ = "kpi_llm_call_log"
+
+    call_log_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Correlation key — all calls within one user-facing operation
+    # share this. UUID4 hex (32 chars); ``None`` when nothing set the
+    # context (background job, direct service call).
+    correlation_id = Column(String(40), nullable=True)
+
+    # See CALL_LOG_SOURCES.
+    trigger_source = Column(String(40), nullable=False, default="unknown")
+
+    # Optional pointer back to the higher-level row this call belongs
+    # to. trigger_ref_kind names the table (e.g. "kpi_chat_message"),
+    # trigger_ref_id is the PK in that table. Both null when the source
+    # is something without a parent row (e.g. provider_test).
+    trigger_ref_kind = Column(String(40), nullable=True)
+    trigger_ref_id = Column(Integer, nullable=True)
+
+    # Tenant + actor (when known).
+    company_id = Column(Integer, nullable=True)
+    user_id = Column(Integer, nullable=True)
+
+    # Provider identity at the time of the call. provider_config_id
+    # is nullable because env-bootstrapped providers don't have a row
+    # in kpi_llm_provider_config.
+    provider_config_id = Column(
+        Integer,
+        ForeignKey("kpi_llm_provider_config.provider_config_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider_kind = Column(String(40), nullable=False)
+    provider_label = Column(String(200), nullable=True)
+    base_url = Column(String(500), nullable=False)
+    model = Column(String(200), nullable=False)
+
+    # Pipeline stage that asked for this call (when applicable). One
+    # of the keys from kpi_studio.stages. Null for healthcheck probes
+    # and provider tests.
+    stage_key = Column(String(40), nullable=True)
+
+    # Request shape. Always POST today; we record the method + path
+    # anyway so future endpoints (embeddings, etc.) classify cleanly.
+    request_method = Column(String(10), nullable=False, default="POST")
+    request_path = Column(String(200), nullable=False)
+    # JSON string (not JSON column — we want to render exactly what
+    # was sent, byte-for-byte, including the order of keys). Capped
+    # at 64 KB; request_truncated flips when we cropped.
+    request_body = Column(Text, nullable=True)
+    request_headers = Column(Text, nullable=True)   # masked, JSON string
+    request_truncated = Column(Boolean, nullable=False, default=False)
+
+    # Response. response_status is the HTTP code; response_body is
+    # the raw text (parsed-or-not JSON). Same 64 KB cap.
+    response_status = Column(Integer, nullable=True)
+    response_body = Column(Text, nullable=True)
+    response_truncated = Column(Boolean, nullable=False, default=False)
+
+    # Outcome.
+    succeeded = Column(Boolean, nullable=False, default=False)
+    error = Column(Text, nullable=True)
+    latency_ms = Column(Integer, nullable=False, default=0)
+
+    # Token bookkeeping (when the response carried it). Most OpenAI-
+    # compatible providers return a ``usage`` block; we mine it.
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+
+    started_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_kpi_llm_call_log_started", "started_at"),
+        Index("ix_kpi_llm_call_log_corr", "correlation_id"),
+        Index("ix_kpi_llm_call_log_provider", "provider_config_id", "started_at"),
+        Index("ix_kpi_llm_call_log_source", "trigger_source", "started_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-003 — Scheduled jobs
+# ---------------------------------------------------------------------------
+# In-process APScheduler audit + admin surface. The host runs no Celery /
+# Redis per design, so this is an in-memory ``BackgroundScheduler``;
+# scaling out to multiple workers in future is a swap for an
+# SQLAlchemyJobStore + a coordinator lock.
+
+# Allowed status values for KpiScheduledJobRun.status. ``running`` is
+# set when the wrapper enters the job; flipped to ``success`` or
+# ``failed`` when the function returns / raises. ``cancelled`` is for
+# manual termination via the admin UI's "stop" affordance (future).
+SCHEDULED_JOB_RUN_STATUSES = ("running", "success", "failed", "cancelled")
+
+
+class KpiScheduledJobRun(KpiBase):
+    """One execution of a registered scheduled job.
+
+    Rows are inserted in the ``running`` state when the wrapper starts
+    the job, then updated to ``success`` / ``failed`` when it exits.
+    A crashed worker leaves rows stuck at ``running`` — surfacing those
+    (last_updated_at + status filter) is how the admin UI shows
+    "missed heartbeat" diagnostics.
+    """
+    __tablename__ = "kpi_scheduled_job_run"
+
+    run_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # ``job_name`` is the key used by ``services.scheduler.register`` and
+    # also what appears in the admin list / "Run now" surface.
+    job_name = Column(String(100), nullable=False)
+
+    # ``cli`` | ``api_trigger`` | ``scheduled``. ``cli`` reserved for
+    # future manual invocations from the eval CLI style entrypoint.
+    trigger_source = Column(String(20), nullable=False, default="scheduled")
+    triggered_by_user_id = Column(Integer, nullable=True)
+
+    started_at = Column(DateTime, nullable=False, default=_utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    # See SCHEDULED_JOB_RUN_STATUSES.
+    status = Column(String(20), nullable=False, default="running")
+    error = Column(Text, nullable=True)
+
+    # Job-defined integer for "how much work happened this run" — e.g.
+    # rows reindexed, KPIs refreshed, change-log entries written. The
+    # admin UI shows the rolling average so a job that suddenly drops
+    # to 0 stands out as a likely regression.
+    items_processed = Column(Integer, nullable=True)
+
+    duration_ms = Column(Integer, nullable=True)
+
+    # Free-form bag for per-job diagnostics — e.g.
+    # ``{"snapshots_compared": 2, "tables_reindexed": 47}``. Reserved
+    # for whatever the job wants to expose without growing a column.
+    detail_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_kpi_scheduled_job_run_name_started", "job_name", "started_at"),
+        Index("ix_kpi_scheduled_job_run_status", "status"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-001 — Eval harness
+# ---------------------------------------------------------------------------
+# Golden test cases for the NL→SQL agent + a per-run audit log. The runner
+# (kpi_studio/eval/runner.py) reads cases, fires the full pipeline against
+# each (preflight → agent → safety → execute), and writes one
+# KpiEvalCaseResult per case under a parent KpiEvalRun. CI can compare the
+# pass rate of a run against a prior baseline and block regressions.
+
+# Allowed case status values written to KpiEvalCaseResult.status. ``pass``
+# = every comparator green. ``fail`` = at least one comparator red but the
+# pipeline ran to completion. ``error`` = pipeline blew up (provider down,
+# DB error, etc.). ``skipped`` = case was deactivated or filtered out.
+EVAL_CASE_STATUSES = ("pass", "fail", "error", "skipped")
+
+# Why a case failed — a stable code per comparator, recorded as a list
+# on KpiEvalCaseResult.failure_reasons. Keeps reports machine-readable.
+EVAL_FAILURE_CODES = (
+    "tables_missing",       # expected_tables not all present in produced SQL
+    "tables_extra",         # produced SQL touches tables the case didn't expect
+    "columns_missing",      # expected_columns not all referenced
+    "row_count_low",        # produced_row_count < expected_row_count_min
+    "row_count_high",       # produced_row_count > expected_row_count_max
+    "sql_exec_failed",      # safety / executor raised
+    "agent_no_proposal",    # agent exited without calling propose_sql
+    "agent_timeout",        # token budget / iteration cap hit
+    "provider_error",       # LLM provider returned non-2xx
+)
+
+
+class KpiEvalCase(KpiBase):
+    """A single golden test case for the NL→SQL pipeline.
+
+    Each case is a prompt plus the expectations the pipeline must satisfy
+    when fed that prompt. Authoring is manual (or by promoting a
+    high-rated chat turn via the auto-promotion flow in T-401). Failed
+    comparators are recorded on KpiEvalCaseResult, never on the case row
+    itself — the case is the spec, the run is the observation.
+    """
+    __tablename__ = "kpi_eval_case"
+
+    case_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Short human-readable label shown in CLI output and the admin UI.
+    # Not used for any matching — duplicates allowed but discouraged.
+    name = Column(String(200), nullable=False)
+
+    # The natural-language prompt to feed through the pipeline. Verbatim;
+    # no preprocessing.
+    prompt = Column(Text, nullable=False)
+
+    # Expectations. All optional — a case may assert only some
+    # comparators. Missing fields skip the corresponding comparator
+    # rather than counting as a fail.
+    #
+    # ``expected_tables`` — list[str], table names that MUST appear in
+    #   the agent's final SQL. Extras are allowed unless ``strict_tables``.
+    # ``expected_columns`` — list[str], qualified names like
+    #   "customer.name" that MUST appear in the SELECT list.
+    # ``expected_row_count_min`` / ``expected_row_count_max`` — inclusive
+    #   range the result row count must land within. Either can be null.
+    # ``golden_sql`` — the canonical SQL a human would write. Not
+    #   compared verbatim (SQL has many valid spellings); rendered in
+    #   reports as a diff hint when the case fails.
+    expected_tables = Column(JSON, nullable=True)
+    expected_columns = Column(JSON, nullable=True)
+    expected_row_count_min = Column(Integer, nullable=True)
+    expected_row_count_max = Column(Integer, nullable=True)
+    golden_sql = Column(Text, nullable=True)
+
+    # If true, produced SQL touching any table OUTSIDE expected_tables
+    # is a fail (tables_extra). Default false — we mostly care about
+    # what's present, not what's absent.
+    strict_tables = Column(Boolean, nullable=False, default=False)
+
+    # Free-form labels for filtering: e.g., ``["critical"]``,
+    # ``["adversarial", "tenant"]``, ``["regression-2026-Q2"]``.
+    tags = Column(JSON, nullable=True)
+
+    # Soft-delete flag. ``is_active=false`` cases are skipped by the
+    # runner but kept for historical comparison.
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Cached last-run summary so the admin list page doesn't have to
+    # join against KpiEvalCaseResult on every render.
+    last_pass_at = Column(DateTime, nullable=True)
+    last_fail_reason = Column(Text, nullable=True)
+
+    # Optional pin — when set, the case only runs against this schema
+    # snapshot (used for cases asserting against a specific historical
+    # shape during a migration).
+    pinned_snapshot_id = Column(
+        Integer,
+        ForeignKey("kpi_schema_snapshot.snapshot_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    created_by = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    updated_by = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_kpi_eval_case_active", "is_active"),
+    )
+
+
+class KpiEvalRun(KpiBase):
+    """One invocation of the eval runner (CLI, CI hook, or API).
+
+    Holds run-level totals and a snapshot of the knowledge versions
+    that were live — so a degraded pass rate can be correlated against
+    a prompt-version or schema-snapshot change.
+    """
+    __tablename__ = "kpi_eval_run"
+
+    eval_run_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    started_at = Column(DateTime, nullable=False, default=_utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    # ``cli`` | ``ci`` | ``manual`` | ``scheduled`` (T-003). Recorded
+    # so we can split metrics by trigger source.
+    triggered_by = Column(String(20), nullable=False, default="cli")
+
+    # Which user kicked it off (null for ``ci`` / ``scheduled``).
+    triggered_by_user_id = Column(Integer, nullable=True)
+
+    # Subset filter applied — null = all active cases ran. JSON list of
+    # tag strings; the runner uses OR semantics across tags.
+    tags_filter = Column(JSON, nullable=True)
+
+    # Knowledge fingerprint at run-time. ``snapshot_id`` is FK; the
+    # other two are free-form strings populated once T-002 ships
+    # prompt versioning.
+    snapshot_id = Column(
+        Integer,
+        ForeignKey("kpi_schema_snapshot.snapshot_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    prompt_version = Column(String(20), nullable=True)
+    glossary_version = Column(String(40), nullable=True)
+    exemplar_set_hash = Column(String(64), nullable=True)
+
+    # Aggregates — derivable from KpiEvalCaseResult but stored for cheap
+    # list pages.
+    cases_total = Column(Integer, nullable=False, default=0)
+    cases_passed = Column(Integer, nullable=False, default=0)
+    cases_failed = Column(Integer, nullable=False, default=0)
+    cases_errored = Column(Integer, nullable=False, default=0)
+    cases_skipped = Column(Integer, nullable=False, default=0)
+
+    # Free-form bag for stats the CLI / CI hook wants to surface:
+    # e.g. ``{"total_tokens": 12340, "wall_clock_s": 47.3}``.
+    summary_json = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("ix_kpi_eval_run_started", "started_at"),
+    )
+
+
+class KpiEvalCaseResult(KpiBase):
+    """One case's outcome inside an eval run. Cascade-deleted with its run."""
+    __tablename__ = "kpi_eval_case_result"
+
+    result_id = Column(Integer, primary_key=True, autoincrement=True)
+
+    eval_run_id = Column(
+        Integer,
+        ForeignKey("kpi_eval_run.eval_run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    case_id = Column(
+        Integer,
+        ForeignKey("kpi_eval_case.case_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # One of EVAL_CASE_STATUSES.
+    status = Column(String(20), nullable=False)
+
+    # What the agent actually produced. ``produced_sql`` is the
+    # post-safety rewrite; the pre-rewrite version lives on
+    # KpiNlRun.final_sql via ``nl_run_id``.
+    produced_sql = Column(Text, nullable=True)
+    produced_row_count = Column(Integer, nullable=True)
+    tables_referenced = Column(JSON, nullable=True)
+    columns_referenced = Column(JSON, nullable=True)
+
+    # Which comparators tripped. Empty / null on pass. Each entry is a
+    # code from EVAL_FAILURE_CODES.
+    failure_reasons = Column(JSON, nullable=True)
+
+    # Free-form per-comparator diagnostic — e.g.,
+    # ``{"tables_missing": ["customer"], "row_count_low": {"got": 0, "min": 1}}``.
+    failure_detail = Column(JSON, nullable=True)
+
+    duration_ms = Column(Integer, nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+
+    # Link back to the KpiNlRun this case generated (replay /
+    # debugging). Null if the pipeline never reached the agent stage.
+    nl_run_id = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_kpi_eval_result_run", "eval_run_id"),
+        Index("ix_kpi_eval_result_case", "case_id"),
+    )
 
 
 __all__ = [
@@ -647,6 +1194,17 @@ __all__ = [
     "KpiChatMessage",
     "KpiSettings",
     "KpiTableRelationship",
+    "KpiEvalCase",
+    "KpiEvalRun",
+    "KpiEvalCaseResult",
+    "EVAL_CASE_STATUSES",
+    "EVAL_FAILURE_CODES",
+    "KpiScheduledJobRun",
+    "SCHEDULED_JOB_RUN_STATUSES",
+    "KpiLlmProviderConfig",
+    "PROVIDER_KINDS",
+    "KpiLlmCallLog",
+    "CALL_LOG_SOURCES",
     "DASHBOARD_SCOPE_USER",
     "DASHBOARD_SCOPE_COMPANY",
     "CARD_SIZES",

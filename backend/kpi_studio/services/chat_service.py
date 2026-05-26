@@ -26,8 +26,8 @@ from sqlalchemy.orm import Session, selectinload
 from kpi_studio.models import KpiChatMessage, KpiChatSession
 from kpi_studio.providers.llm.base import LlmMessage, LlmProvider
 from kpi_studio.services import (
-    chart_picker, chat_summarizer, insight_generator, introspector,
-    nl2sql_agent, preflight, settings_service,
+    call_logger, chart_picker, chat_summarizer, insight_generator, introspector,
+    knowledge_versions, nl2sql_agent, preflight, settings_service,
 )
 from kpi_studio.services.executor import (
     QueryExecutionError, execute_safe_query,
@@ -277,6 +277,33 @@ def run_turn(
     :class:`AgentStep` as it happens, and is told to abort whenever
     ``cancel_check()`` returns True.
     """
+    # Open call-log correlation: every LLM call fired inside this turn
+    # (preflight + agent + insight) groups under one correlation_id so
+    # the admin's Call log tab can show "this chat turn = 12 calls".
+    with call_logger.log_context(
+        trigger_source="chat",
+        trigger_ref_kind="kpi_chat_message",
+        user_id=user_id,
+        company_id=company_id,
+    ):
+        return _run_turn_inner(
+            db, session, prompt=prompt, cfg=cfg,
+            user_id=user_id, company_id=company_id,
+            on_step=on_step, cancel_check=cancel_check,
+        )
+
+
+def _run_turn_inner(
+    db: Session,
+    session: KpiChatSession,
+    *,
+    prompt: str,
+    cfg,
+    user_id: Optional[int],
+    company_id: Optional[int],
+    on_step: Optional[Callable[[Any], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Tuple[KpiChatMessage, KpiChatMessage]:
     # 1. Persist the user turn first so it's recoverable even if the agent crashes.
     user_msg = KpiChatMessage(
         chat_session_id=session.chat_session_id,
@@ -301,6 +328,20 @@ def run_turn(
             db, session, error="llm_disabled",
             content=_friendly_failure_message("llm_disabled"),
         )
+
+    # T-902: per-stage routing. Each stage picks its own model from the
+    # settings matrix; same key + base_url + extras, just a different
+    # model string. Falls back to the default provider when the stage
+    # has no override, so single-model setups keep working unchanged.
+    from kpi_studio.stages import (
+        STAGE_AGENT_DEFAULT, STAGE_INSIGHT_GENERATOR, STAGE_PREFLIGHT_PLANNER,
+    )
+    preflight_provider = settings_service.provider_for_stage(
+        eff, STAGE_PREFLIGHT_PLANNER) or provider
+    agent_provider = settings_service.provider_for_stage(
+        eff, STAGE_AGENT_DEFAULT) or provider
+    insight_provider = settings_service.provider_for_stage(
+        eff, STAGE_INSIGHT_GENERATOR) or provider
 
     # 3. Schema context — auto-introspect on first call.
     schema_payload = _ensure_schema(db, cfg)
@@ -335,19 +376,20 @@ def run_turn(
     sql_original_prompt: Optional[str] = None
     if eff.preflight_enabled:
         try:
-            preflight_verdict = preflight.run_preflight(
-                provider=provider,
-                schema=schema_payload,
-                user_prompt=prompt,
-                domain_knowledge=eff.domain_knowledge,
-                max_rounds=eff.preflight_max_rounds,
-                history=recent_history,
-                on_step=(
-                    (lambda s: on_step(_preflight_step_to_agent_step(s)))
-                    if on_step is not None else None
-                ),
-                cancel_check=cancel_check,
-            )
+            with call_logger.stage_scope(STAGE_PREFLIGHT_PLANNER):
+                preflight_verdict = preflight.run_preflight(
+                    provider=preflight_provider,
+                    schema=schema_payload,
+                    user_prompt=prompt,
+                    domain_knowledge=eff.domain_knowledge,
+                    max_rounds=eff.preflight_max_rounds,
+                    history=recent_history,
+                    on_step=(
+                        (lambda s: on_step(_preflight_step_to_agent_step(s)))
+                        if on_step is not None else None
+                    ),
+                    cancel_check=cancel_check,
+                )
         except Exception:  # noqa: BLE001
             log.exception("kpi_studio.chat: preflight crashed; falling back")
             preflight_verdict = None
@@ -385,27 +427,28 @@ def run_turn(
 
     sql_retries = 3
     try:
-        agent_result = nl2sql_agent.run_agent(
-            provider=provider,
-            schema=schema_payload,
-            target_engine=cfg.target_engine,
-            db=db,
-            user_prompt=sql_user_prompt,
-            original_prompt=sql_original_prompt,
-            user_id=user_id,
-            company_id=company_id,
-            # Headroom so the schema-discovery phase isn't starved by
-            # retries — 3 retries can each consume an extra round.
-            max_iterations=max(eff.max_iterations, eff.max_iterations + sql_retries),
-            token_budget=eff.token_budget,
-            max_tokens_per_call=eff.max_tokens_per_call,
-            history=recent_history,
-            on_step=on_step,
-            cancel_check=cancel_check,
-            system_prompt_extras=eff.domain_knowledge,
-            execute_sql_fn=_exec_for_agent,
-            max_sql_retries=sql_retries,
-        )
+        with call_logger.stage_scope(STAGE_AGENT_DEFAULT):
+            agent_result = nl2sql_agent.run_agent(
+                provider=agent_provider,
+                schema=schema_payload,
+                target_engine=cfg.target_engine,
+                db=db,
+                user_prompt=sql_user_prompt,
+                original_prompt=sql_original_prompt,
+                user_id=user_id,
+                company_id=company_id,
+                # Headroom so the schema-discovery phase isn't starved by
+                # retries — 3 retries can each consume an extra round.
+                max_iterations=max(eff.max_iterations, eff.max_iterations + sql_retries),
+                token_budget=eff.token_budget,
+                max_tokens_per_call=eff.max_tokens_per_call,
+                history=recent_history,
+                on_step=on_step,
+                cancel_check=cancel_check,
+                system_prompt_extras=eff.domain_knowledge,
+                execute_sql_fn=_exec_for_agent,
+                max_sql_retries=sql_retries,
+            )
     except Exception as exc:  # noqa: BLE001 — we always surface to the user
         log.exception("kpi_studio.chat: agent crashed")
         # Technical exception text stays in the log + on the abort step's
@@ -473,15 +516,16 @@ def run_turn(
     insight_tokens = 0
     insight_latency_ms = 0
     if succeeded and columns is not None and rows is not None:
-        ins = insight_generator.generate_insight(
-            provider=provider,
-            user_prompt=prompt,
-            sql=agent_result.sql or "",
-            columns=columns,
-            rows=rows,
-            chart_type=chart_type_for_insight,
-            max_tokens=min(eff.max_tokens_per_call, 800),
-        )
+        with call_logger.stage_scope(STAGE_INSIGHT_GENERATOR):
+            ins = insight_generator.generate_insight(
+                provider=insight_provider,
+                user_prompt=prompt,
+                sql=agent_result.sql or "",
+                columns=columns,
+                rows=rows,
+                chart_type=chart_type_for_insight,
+                max_tokens=min(eff.max_tokens_per_call, 800),
+            )
         if ins.error:
             log.info("kpi_studio.chat: insight pass skipped: %s", ins.error)
         else:
@@ -503,6 +547,7 @@ def run_turn(
     else:
         message_content = _friendly_failure_message(error)
         message_error = None
+    _fp = knowledge_versions.current(db)
     assistant_msg = KpiChatMessage(
         chat_session_id=session.chat_session_id,
         role="assistant",
@@ -523,6 +568,7 @@ def run_turn(
         # message so the audit trail reflects total cost of the turn.
         tokens=agent_result.total_tokens + insight_tokens,
         duration_ms=agent_result.total_latency_ms + insight_latency_ms,
+        **_fp.as_kwargs(),
     )
     db.add(assistant_msg)
     # Touching updated_at via SQLAlchemy onupdate requires a real change
@@ -583,6 +629,7 @@ def _save_assistant_failure(
         content=content,
         succeeded=False,
         error=None,
+        **knowledge_versions.current(db).as_kwargs(),
     )
     db.add(msg)
     session.updated_at = datetime.now(timezone.utc)
@@ -615,6 +662,7 @@ def _save_assistant_clarify(
         recommendations=options or None,
         tokens=verdict.total_tokens or 0,
         error=verdict.error[:500] if verdict.error else None,
+        **knowledge_versions.current(db).as_kwargs(),
     )
     db.add(msg)
     session.updated_at = datetime.now(timezone.utc)
