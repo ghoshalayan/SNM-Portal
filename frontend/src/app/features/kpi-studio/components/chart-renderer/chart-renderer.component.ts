@@ -444,30 +444,56 @@ interface LinePoint { x: number; y: number; label: string; }
       min-width: 28px;
     }
 
-    /* Pie chart */
+    /* Pie chart.
+       Two-column grid: fixed-width SVG on the left, scrollable legend
+       on the right. The host-level :host gives us a height; we forward
+       that to the grid via min-height:0 + overflow:hidden so a long
+       legend can't push the SVG out of the card. The legend itself
+       owns its overflow with overflow-y:auto — that's what keeps
+       high-cardinality categories (e.g. dia-wise breakdowns with 15+
+       slices) readable instead of bursting the chart. */
     .pie-chart {
-      display: grid; grid-template-columns: minmax(0, 200px) 1fr;
+      display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
       gap: 20px; padding: 8px;
-      align-items: center; width: 100%;
+      align-items: stretch; width: 100%;
+      min-height: 0;
+      overflow: hidden;
     }
     .pie-svg {
       width: 100%; max-width: 200px; height: auto; aspect-ratio: 1;
+      align-self: center;
       filter: drop-shadow(0 4px 12px var(--snm-glass-shadow-light, rgba(0, 0, 0, 0.08)));
     }
     .legend {
-      list-style: none; padding: 0; margin: 0; font-size: 0.82rem;
+      list-style: none; padding: 0 4px 0 0; margin: 0; font-size: 0.82rem;
       display: flex; flex-direction: column; gap: 6px;
       color: var(--kpi-text);
+      overflow-y: auto;
+      min-height: 0;
+      max-height: 100%;
+      align-self: stretch;
+      scrollbar-width: thin;
+      scrollbar-color: var(--snm-scrollbar-thumb, rgba(100, 140, 200, 0.2)) transparent;
+    }
+    .legend::-webkit-scrollbar { width: 6px; }
+    .legend::-webkit-scrollbar-thumb {
+      background: var(--snm-scrollbar-thumb, rgba(100, 140, 200, 0.2));
+      border-radius: 3px;
+    }
+    .legend::-webkit-scrollbar-thumb:hover {
+      background: var(--snm-scrollbar-thumb-hover, rgba(100, 140, 200, 0.35));
     }
     .legend li {
       display: flex; align-items: center;
       padding: 4px 8px; border-radius: 6px;
       transition: background 160ms ease;
+      flex: 0 0 auto;
       &:hover { background: var(--snm-accent-subtle, rgba(91, 143, 217, 0.08)); }
     }
     .legend .dot {
       display: inline-block; width: 10px; height: 10px;
       border-radius: 50%; margin-right: 8px; vertical-align: middle;
+      flex: 0 0 auto;
       box-shadow: 0 0 6px currentColor;
     }
 
